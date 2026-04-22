@@ -55,9 +55,15 @@ if not exist "installer\postgres\postgresql-16-windows-x64.exe" (
 call :log ""
 
 call :log "[1/5] Verifying app dependencies..."
-if exist "node_modules\.bin\vite.cmd" (
-    call :log "[OK] App dependencies already installed."
+set "NEEDS_FULL_INSTALL=0"
+if not exist "node_modules\.bin\vite.cmd" set "NEEDS_FULL_INSTALL=1"
+if not exist "node_modules\.bin\electron-builder.cmd" set "NEEDS_FULL_INSTALL=1"
+if not exist "node_modules\electron\dist\electron.exe" set "NEEDS_FULL_INSTALL=1"
+
+if "%NEEDS_FULL_INSTALL%"=="0" (
+    call :log "[OK] App and Electron dependencies already installed."
 ) else (
+    call :log "[INFO] Missing dependencies detected. Reinstalling full project dependencies..."
     if exist "package-lock.json" (
         call :run "Installing app dependencies with npm ci" npm ci --no-audit --no-fund --loglevel=error
     ) else (
