@@ -19,6 +19,17 @@ export interface CompanyFileInfo {
   readOnlyMode: boolean;
   activeSnapshot: string | null;
   database: string;
+  traveler?: TravelerStatus;
+}
+
+export interface TravelerStatus {
+  active: boolean;
+  filename: string | null;
+  mountedAt: string | null;
+  database: string | null;
+  readOnly: boolean;
+  liveDatabase: string;
+  activeDatabase: string;
 }
 
 function authHeaders(): HeadersInit {
@@ -96,6 +107,31 @@ export async function restoreCompanyFile(filename: string): Promise<void> {
     },
   );
   await unwrap(res);
+}
+
+/** Phase 5 — Traveler mode: open a .nexor as a read-only snapshot. */
+export async function mountReadOnlySnapshot(filename: string): Promise<TravelerStatus> {
+  const res = await fetch(
+    `${getApiUrl()}/api/company-file/mount-readonly/${encodeURIComponent(filename)}`,
+    { method: 'POST', headers: authHeaders() },
+  );
+  return unwrap<TravelerStatus>(res);
+}
+
+export async function unmountReadOnlySnapshot(): Promise<void> {
+  const res = await fetch(
+    `${getApiUrl()}/api/company-file/unmount-readonly`,
+    { method: 'POST', headers: authHeaders() },
+  );
+  await unwrap(res);
+}
+
+export async function getReadOnlyStatus(): Promise<TravelerStatus> {
+  const res = await fetch(
+    `${getApiUrl()}/api/company-file/readonly-status`,
+    { headers: authHeaders() },
+  );
+  return unwrap<TravelerStatus>(res);
 }
 
 /** Friendly file size formatter used by the Settings UI. */

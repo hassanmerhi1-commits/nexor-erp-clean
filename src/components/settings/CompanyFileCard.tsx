@@ -25,6 +25,8 @@ import {
   RotateCcw,
   ShieldAlert,
   FolderOpen,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -34,6 +36,8 @@ import {
   downloadCompanyFile,
   restoreCompanyFile,
   getCompanyFileInfo,
+  mountReadOnlySnapshot,
+  unmountReadOnlySnapshot,
   formatBytes,
   type CompanyFileMeta,
   type CompanyFileInfo,
@@ -57,6 +61,7 @@ export function CompanyFileCard() {
   // Restore confirmation dialog state
   const [restoreTarget, setRestoreTarget] = useState<string | null>(null);
   const [confirmText, setConfirmText] = useState('');
+  const [mounting, setMounting] = useState<string | null>(null);
 
   async function refresh() {
     setLoading(true);
@@ -117,6 +122,38 @@ export function CompanyFileCard() {
     }
   }
 
+  async function handleMountReadOnly(filename: string) {
+    if (!confirm(
+      `Open ${filename} as a READ-ONLY snapshot?\n\n` +
+      `The app will browse this file instead of the live database. ` +
+      `No changes can be saved until you exit Traveler Mode.`
+    )) return;
+    setMounting(filename);
+    try {
+      await mountReadOnlySnapshot(filename);
+      toast.success(`Traveler Mode active — viewing ${filename}`, {
+        description: 'The app is now read-only. Use the banner to exit.',
+      });
+      // Reload so cached app state reflects the snapshot
+      setTimeout(() => window.location.reload(), 600);
+    } catch (e: any) {
+      toast.error(`Failed to open snapshot: ${e.message}`);
+      setMounting(null);
+    }
+  }
+
+  async function handleUnmountReadOnly() {
+    setMounting('__unmount__');
+    try {
+      await unmountReadOnlySnapshot();
+      toast.success('Live database restored');
+      setTimeout(() => window.location.reload(), 500);
+    } catch (e: any) {
+      toast.error(`Failed to exit traveler mode: ${e.message}`);
+      setMounting(null);
+    }
+  }
+
   async function handleConfirmRestore() {
     if (!restoreTarget) return;
     if (confirmText !== 'RESTORE') {
@@ -163,6 +200,34 @@ export function CompanyFileCard() {
         </CardHeader>
 
         <CardContent className="space-y-6">
+          {info?.readOnlyMode && (
+            <div className="rounded-lg border border-warning/40 bg-warning/10 p-3 flex items-start justify-between gap-3">
+              <div className="text-sm">
+                <div className="font-medium flex items-center gap-1.5">
+                  <Eye className="h-4 w-4" /> Traveler Mode active
+                </div>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Viewing snapshot{' '}
+                  <span className="font-mono">{info.activeSnapshot || '—'}</span>.
+                  All write actions are disabled.
+                </p>
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleUnmountReadOnly}
+                disabled={mounting === '__unmount__'}
+              >
+                {mounting === '__unmount__' ? (
+                  <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                ) : (
+                  <EyeOff className="h-3.5 w-3.5 mr-1.5" />
+                )}
+                Exit Traveler Mode
+              </Button>
+            </div>
+          )}
+
           {/* Active database info */}
           {info && (
             <div className="rounded-lg border bg-muted/40 p-3 space-y-1 text-xs">
@@ -254,6 +319,19 @@ export function CompanyFileCard() {
                         onClick={() => handleDownload(f.filename)}
                       >
                         <Download className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        title="Open as Read-Only (Traveler Mode)"
+                        disabled={info?.readOnlyMode || mounting === f.filename}
+                        onClick={() => handleMountReadOnly(f.filename)}
+                      >
+                        {mounting === f.filename ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Eye className="h-4 w-4" />
+                        )}
                       </Button>
                       <Button
                         size="icon"

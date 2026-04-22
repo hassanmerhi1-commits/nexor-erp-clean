@@ -2,6 +2,7 @@
 import { Outlet } from 'react-router-dom';
 import { TopNav } from './TopNav';
 import { StatusBar } from './StatusBar';
+import { ReadOnlyBanner } from './ReadOnlyBanner';
 import { useBranchContext } from '@/contexts/BranchContext';
 import { useAuth } from '@/hooks/useERP';
 
@@ -11,6 +12,7 @@ export function AppLayout() {
 
   return (
     <div className="h-screen flex flex-col bg-background overflow-hidden">
+      <ReadOnlyBanner />
       <TopNav
         user={user}
         branches={branches}

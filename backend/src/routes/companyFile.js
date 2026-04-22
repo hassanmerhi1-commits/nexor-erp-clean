@@ -22,6 +22,7 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const { execFile } = require('child_process');
+const traveler = require('../traveler');
 
 module.exports = function companyFileRoutes() {
   const router = express.Router();
@@ -92,6 +93,7 @@ module.exports = function companyFileRoutes() {
       readOnlyMode: process.env.NEXOR_READ_ONLY === '1',
       activeSnapshot: process.env.NEXOR_ACTIVE_SNAPSHOT || null,
       database: getPgEnv().PGDATABASE,
+      traveler: traveler.getStatus(),
     });
   });
 
@@ -238,6 +240,38 @@ module.exports = function companyFileRoutes() {
       console.error('[NEXOR RESTORE ERROR]', err.message);
       res.status(500).json({ error: err.message });
     }
+  });
+
+  // ---------- POST /mount-readonly/:filename (Phase 5: Traveler Mode) ----------
+  router.post('/mount-readonly/:filename', async (req, res) => {
+    try {
+      const safe = safeName(req.params.filename);
+      const filepath = path.join(COMPANY_FILES_DIR, safe);
+      if (!fs.existsSync(filepath)) {
+        return res.status(404).json({ error: 'Company file not found' });
+      }
+      const status = await traveler.mountSnapshot(filepath, safe);
+      res.json({ success: true, ...status });
+    } catch (err) {
+      console.error('[TRAVELER MOUNT ERROR]', err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ---------- POST /unmount-readonly ----------
+  router.post('/unmount-readonly', async (_req, res) => {
+    try {
+      const previous = await traveler.unmountSnapshot();
+      res.json({ success: true, previous });
+    } catch (err) {
+      console.error('[TRAVELER UNMOUNT ERROR]', err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ---------- GET /readonly-status ----------
+  router.get('/readonly-status', (_req, res) => {
+    res.json(traveler.getStatus());
   });
 
   return router;
