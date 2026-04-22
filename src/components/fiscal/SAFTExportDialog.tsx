@@ -1,0 +1,432 @@
+import { useState } from 'react';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
+import { Separator } from '@/components/ui/separator';
+import { Card, CardContent } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Checkbox } from '@/components/ui/checkbox';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { 
+  FileJson, 
+  FileCode, 
+  Download, 
+  FileText,
+  Building2,
+  Calendar,
+  Users,
+  Package,
+  Receipt,
+  AlertCircle,
+  CheckCircle2,
+  Loader2,
+} from 'lucide-react';
+import { useBranches, useSales, useProducts, useClients } from '@/hooks/useERP';
+import { 
+  generateSAFTAO, 
+  downloadSAFTFile, 
+  getSAFTSummary,
+  SAFTExportOptions,
+  SAFTAO,
+  SAFTSummary 
+} from '@/lib/saftAO';
+import { getCompanySettings } from '@/lib/companySettings';
+import { toast } from 'sonner';
+
+interface SAFTExportDialogProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}
+
+export function SAFTExportDialog({
+  open,
+  onOpenChange,
+}: SAFTExportDialogProps) {
+  const { branches, currentBranch } = useBranches();
+  const { sales } = useSales();
+  const { products } = useProducts();
+  const { clients } = useClients();
+  
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [generatedSAFT, setGeneratedSAFT] = useState<SAFTAO | null>(null);
+  const [summary, setSummary] = useState<SAFTSummary | null>(null);
+  
+  // Get current month's date range as default
+  const now = new Date();
+  const firstOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+  const lastOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+  
+  const [options, setOptions] = useState<SAFTExportOptions>({
+    startDate: firstOfMonth.toISOString().split('T')[0],
+    endDate: lastOfMonth.toISOString().split('T')[0],
+    branchId: undefined,
+    includeVoided: false,
+    format: 'json',
+  });
+  
+  const company = getCompanySettings();
+  
+  const handleGenerate = async () => {
+    setIsGenerating(true);
+    
+    try {
+      // Validate company settings
+      if (!company.nif || company.nif === '5000000000') {
+        toast.error('Configure o NIF da empresa antes de exportar');
+        setIsGenerating(false);
+        return;
+      }
+      
+      const saft = generateSAFTAO(sales, products, clients, options);
+      const saftSummary = getSAFTSummary(saft);
+      
+      setGeneratedSAFT(saft);
+      setSummary(saftSummary);
+      
+      toast.success('SAF-T AO gerado com sucesso');
+    } catch (error) {
+      console.error('Error generating SAF-T:', error);
+      toast.error('Erro ao gerar SAF-T: ' + (error as Error).message);
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+  
+  const handleDownload = () => {
+    if (!generatedSAFT) return;
+    
+    try {
+      downloadSAFTFile(generatedSAFT, options.format);
+      toast.success(`Ficheiro SAF-T ${options.format.toUpperCase()} descarregado`);
+    } catch (error) {
+      toast.error('Erro ao descarregar ficheiro');
+    }
+  };
+  
+  const handleDownloadXmlFromServer = async () => {
+    try {
+      setIsGenerating(true);
+      const { getApiUrl } = await import('@/lib/api/config');
+      const baseUrl = getApiUrl();
+      const sp = new URLSearchParams({ startDate: options.startDate, endDate: options.endDate });
+      
+      const a = document.createElement('a');
+      a.href = `${baseUrl}/api/saft-xml/download?${sp}`;
+      a.download = `SAFT-AO_${company.nif}_${options.startDate}_${options.endDate}.xml`;
+      a.click();
+      
+      toast.success('Ficheiro SAF-T XML (servidor) descarregado');
+    } catch (error) {
+      toast.error('Servidor indisponível — use a exportação local');
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+  
+  const handleReset = () => {
+    setGeneratedSAFT(null);
+    setSummary(null);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <FileText className="w-5 h-5" />
+            Exportar SAF-T AO
+          </DialogTitle>
+          <DialogDescription>
+            Gere o ficheiro SAF-T para submissão à AGT (Administração Geral Tributária)
+          </DialogDescription>
+        </DialogHeader>
+
+        {!generatedSAFT ? (
+          <div className="space-y-6">
+            {/* Company Info Banner */}
+            <Card className="bg-muted/50">
+              <CardContent className="pt-4">
+                <div className="flex items-center gap-3">
+                  <Building2 className="w-8 h-8 text-primary" />
+                  <div>
+                    <p className="font-medium">{company.name}</p>
+                    <p className="text-sm text-muted-foreground">NIF: {company.nif}</p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Date Range */}
+            <div className="space-y-3">
+              <Label className="flex items-center gap-2">
+                <Calendar className="w-4 h-4" />
+                Período de Exportação
+              </Label>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="startDate" className="text-sm text-muted-foreground">
+                    Data Início
+                  </Label>
+                  <Input
+                    id="startDate"
+                    type="date"
+                    value={options.startDate}
+                    onChange={(e) => setOptions({ ...options, startDate: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="endDate" className="text-sm text-muted-foreground">
+                    Data Fim
+                  </Label>
+                  <Input
+                    id="endDate"
+                    type="date"
+                    value={options.endDate}
+                    onChange={(e) => setOptions({ ...options, endDate: e.target.value })}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Branch Selection */}
+            <div className="space-y-3">
+              <Label>Filial</Label>
+              <Select
+                value={options.branchId || 'all'}
+                onValueChange={(value) => 
+                  setOptions({ ...options, branchId: value === 'all' ? undefined : value })
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Selecionar filial" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Todas as Filiais</SelectItem>
+                  {branches.map(branch => (
+                    <SelectItem key={branch.id} value={branch.id}>
+                      {branch.name} ({branch.code})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Options */}
+            <div className="flex items-center space-x-2">
+              <Checkbox
+                id="includeVoided"
+                checked={options.includeVoided}
+                onCheckedChange={(checked) => 
+                  setOptions({ ...options, includeVoided: checked as boolean })
+                }
+              />
+              <Label htmlFor="includeVoided" className="text-sm">
+                Incluir documentos anulados
+              </Label>
+            </div>
+
+            <Separator />
+
+            {/* Format Selection */}
+            <div className="space-y-3">
+              <Label>Formato do Ficheiro</Label>
+              <RadioGroup
+                value={options.format}
+                onValueChange={(value) => 
+                  setOptions({ ...options, format: value as 'json' | 'xml' })
+                }
+                className="flex gap-4"
+              >
+                <div className="flex items-center space-x-2">
+                  <RadioGroupItem value="json" id="json" />
+                  <Label htmlFor="json" className="flex items-center gap-2 cursor-pointer">
+                    <FileJson className="w-4 h-4" />
+                    JSON (Recomendado AGT)
+                  </Label>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <RadioGroupItem value="xml" id="xml" />
+                  <Label htmlFor="xml" className="flex items-center gap-2 cursor-pointer">
+                    <FileCode className="w-4 h-4" />
+                    XML (Compatibilidade)
+                  </Label>
+                </div>
+              </RadioGroup>
+            </div>
+
+            {/* Info Banner */}
+            <Card className="border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-950/30">
+              <CardContent className="pt-4">
+                <div className="flex items-start gap-3">
+                  <AlertCircle className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
+                  <div className="text-sm text-blue-800 dark:text-blue-200">
+                    <p className="font-medium mb-1">Requisitos AGT</p>
+                    <ul className="list-disc list-inside space-y-1 text-xs">
+                      <li>SAF-T Facturação: envio mensal</li>
+                      <li>SAF-T Contabilidade Anual: até 10 de Abril</li>
+                      <li>Ficheiro de Inventário: até 15 de Fevereiro</li>
+                    </ul>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Generate Button */}
+            <Button 
+              onClick={handleGenerate} 
+              disabled={isGenerating}
+              className="w-full"
+              size="lg"
+            >
+              {isGenerating ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  A gerar SAF-T...
+                </>
+              ) : (
+                <>
+                  <FileText className="w-4 h-4 mr-2" />
+                  Gerar SAF-T AO
+                </>
+              )}
+            </Button>
+          </div>
+        ) : (
+          <div className="space-y-6">
+            {/* Success Banner */}
+            <Card className="border-green-200 bg-green-50 dark:border-green-800 dark:bg-green-950/30">
+              <CardContent className="pt-4">
+                <div className="flex items-center gap-3">
+                  <CheckCircle2 className="w-8 h-8 text-green-600" />
+                  <div>
+                    <p className="font-medium text-green-800 dark:text-green-200">
+                      SAF-T AO Gerado com Sucesso
+                    </p>
+                    <p className="text-sm text-green-700 dark:text-green-300">
+                      Pronto para download e submissão à AGT
+                    </p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Summary */}
+            {summary && (
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                <Card>
+                  <CardContent className="pt-4">
+                    <div className="flex items-center gap-2 text-muted-foreground mb-1">
+                      <Calendar className="w-4 h-4" />
+                      <span className="text-xs">Período</span>
+                    </div>
+                    <p className="font-medium text-sm">{summary.period}</p>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="pt-4">
+                    <div className="flex items-center gap-2 text-muted-foreground mb-1">
+                      <Receipt className="w-4 h-4" />
+                      <span className="text-xs">Facturas</span>
+                    </div>
+                    <p className="font-bold text-xl">{summary.totalInvoices}</p>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="pt-4">
+                    <div className="flex items-center gap-2 text-muted-foreground mb-1">
+                      <Package className="w-4 h-4" />
+                      <span className="text-xs">Produtos</span>
+                    </div>
+                    <p className="font-bold text-xl">{summary.totalProducts}</p>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="pt-4">
+                    <div className="flex items-center gap-2 text-muted-foreground mb-1">
+                      <Users className="w-4 h-4" />
+                      <span className="text-xs">Clientes</span>
+                    </div>
+                    <p className="font-bold text-xl">{summary.totalCustomers}</p>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="pt-4">
+                    <div className="flex items-center gap-2 text-muted-foreground mb-1">
+                      <span className="text-xs">Total Vendas</span>
+                    </div>
+                    <p className="font-bold text-lg">
+                      {summary.totalCredit.toLocaleString('pt-AO')} Kz
+                    </p>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="pt-4">
+                    <div className="flex items-center gap-2 text-muted-foreground mb-1">
+                      <span className="text-xs">Total IVA</span>
+                    </div>
+                    <p className="font-bold text-lg">
+                      {summary.totalTax.toLocaleString('pt-AO')} Kz
+                    </p>
+                  </CardContent>
+                </Card>
+              </div>
+            )}
+
+            {/* File Info */}
+            <Card>
+              <CardContent className="pt-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    {options.format === 'json' ? (
+                      <FileJson className="w-10 h-10 text-yellow-600" />
+                    ) : (
+                      <FileCode className="w-10 h-10 text-orange-600" />
+                    )}
+                    <div>
+                      <p className="font-medium">
+                        SAFT-AO_{company.nif}_{options.startDate}_{options.endDate}
+                      </p>
+                      <p className="text-sm text-muted-foreground">
+                        Formato: {options.format.toUpperCase()}
+                      </p>
+                    </div>
+                  </div>
+                  <Badge>{options.format.toUpperCase()}</Badge>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Actions */}
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={handleReset} className="flex-1">
+                Voltar
+              </Button>
+              <Button onClick={handleDownload} className="flex-1">
+                <Download className="w-4 h-4 mr-2" />
+                Descarregar Local
+              </Button>
+              <Button variant="secondary" onClick={handleDownloadXmlFromServer} disabled={isGenerating} className="flex-1">
+                <FileCode className="w-4 h-4 mr-2" />
+                XML Servidor
+              </Button>
+            </div>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}

@@ -1,0 +1,633 @@
+import React, { useState, useMemo, useCallback, useEffect } from 'react';
+import { useBranchContext } from '@/contexts/BranchContext';
+import { useAuth } from '@/hooks/useERP';
+import { getBankAccounts, getBankTransactions } from '@/lib/accountingStorage';
+import { BankAccount, BankTransaction } from '@/types/accounting';
+import { format } from 'date-fns';
+import { pt } from 'date-fns/locale';
+
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Checkbox } from '@/components/ui/checkbox';
+import {
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+} from '@/components/ui/table';
+import {
+  Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter,
+} from '@/components/ui/dialog';
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from '@/components/ui/select';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Separator } from '@/components/ui/separator';
+import { useToast } from '@/hooks/use-toast';
+import {
+  Upload, CheckCircle2, AlertTriangle, XCircle, ArrowRightLeft,
+  FileSpreadsheet, Search, Download, Link2, Unlink, Scale,
+} from 'lucide-react';
+import * as XLSX from 'xlsx';
+
+// ==================== TYPES ====================
+
+interface BankStatementRow {
+  id: string;
+  date: string;
+  description: string;
+  reference?: string;
+  amount: number;
+  direction: 'in' | 'out';
+  balance?: number;
+  matched: boolean;
+  matchedTransactionId?: string;
+  matchConfidence?: number;
+}
+
+interface ReconciliationSummary {
+  statementRows: number;
+  matched: number;
+  unmatched: number;
+  systemOnly: number;
+  statementBalance: number;
+  systemBalance: number;
+  difference: number;
+}
+
+const RECON_STORAGE_KEY = 'kwanzaerp_bank_reconciliations';
+
+// ==================== COMPONENT ====================
+
+export default function BankReconciliation() {
+  const { currentBranch } = useBranchContext();
+  const { user } = useAuth();
+  const { toast } = useToast();
+
+  const [selectedAccountId, setSelectedAccountId] = useState<string>('');
+  const [statementRows, setStatementRows] = useState<BankStatementRow[]>([]);
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [activeTab, setActiveTab] = useState('unmatched');
+
+  const [accounts, setAccounts] = useState<BankAccount[]>([]);
+  const [allTransactions, setAllTransactions] = useState<BankTransaction[]>([]);
+
+  useEffect(() => {
+    getBankAccounts(currentBranch?.id).then(setAccounts);
+    getBankTransactions().then(setAllTransactions);
+  }, [currentBranch?.id]);
+
+  const selectedAccount = useMemo(
+    () => accounts.find(a => a.id === selectedAccountId),
+    [accounts, selectedAccountId]
+  );
+
+  const accountTransactions = useMemo(() => {
+    if (!selectedAccountId) return [];
+    let txns = allTransactions.filter(t => t.bankAccountId === selectedAccountId);
+    if (dateFrom) txns = txns.filter(t => t.transactionDate >= dateFrom);
+    if (dateTo) txns = txns.filter(t => t.transactionDate <= dateTo);
+    return txns.sort((a, b) => new Date(a.transactionDate).getTime() - new Date(b.transactionDate).getTime());
+  }, [allTransactions, selectedAccountId, dateFrom, dateTo]);
+
+  const matchedTxnIds = useMemo(
+    () => new Set(statementRows.filter(r => r.matchedTransactionId).map(r => r.matchedTransactionId!)),
+    [statementRows]
+  );
+
+  const unmatchedSystemTxns = useMemo(
+    () => accountTransactions.filter(t => !matchedTxnIds.has(t.id)),
+    [accountTransactions, matchedTxnIds]
+  );
+
+  const summary: ReconciliationSummary = useMemo(() => {
+    const matched = statementRows.filter(r => r.matched).length;
+    const lastRow = statementRows[statementRows.length - 1];
+    const statementBalance = lastRow?.balance ?? statementRows.reduce((s, r) => s + (r.direction === 'in' ? r.amount : -r.amount), 0);
+    const systemBalance = selectedAccount?.currentBalance ?? 0;
+
+    return {
+      statementRows: statementRows.length,
+      matched,
+      unmatched: statementRows.length - matched,
+      systemOnly: unmatchedSystemTxns.length,
+      statementBalance,
+      systemBalance,
+      difference: systemBalance - statementBalance,
+    };
+  }, [statementRows, selectedAccount, unmatchedSystemTxns]);
+
+  // ==================== IMPORT EXCEL ====================
+
+  const handleFileUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const data = new Uint8Array(evt.target?.result as ArrayBuffer);
+        const wb = XLSX.read(data, { type: 'array' });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const json = XLSX.utils.sheet_to_json<any>(ws);
+
+        const rows: BankStatementRow[] = json.map((row: any, i: number) => {
+          const rawDate = row['Data'] || row['Date'] || row['data'] || row['date'] || '';
+          const desc = row['Descrição'] || row['Description'] || row['Descricao'] || row['description'] || row['Movimento'] || '';
+          const ref = row['Referência'] || row['Reference'] || row['Ref'] || row['ref'] || '';
+          const credit = parseFloat(row['Crédito'] || row['Credit'] || row['credito'] || row['credit'] || 0);
+          const debit = parseFloat(row['Débito'] || row['Debit'] || row['debito'] || row['debit'] || 0);
+          const amount = row['Valor'] || row['Amount'] || row['amount'];
+          const balance = parseFloat(row['Saldo'] || row['Balance'] || row['saldo'] || row['balance'] || 0);
+
+          let finalAmount = 0;
+          let direction: 'in' | 'out' = 'in';
+
+          if (amount !== undefined) {
+            finalAmount = Math.abs(parseFloat(amount));
+            direction = parseFloat(amount) >= 0 ? 'in' : 'out';
+          } else if (credit > 0) {
+            finalAmount = credit;
+            direction = 'in';
+          } else if (debit > 0) {
+            finalAmount = debit;
+            direction = 'out';
+          }
+
+          // Parse date
+          let dateStr = '';
+          if (typeof rawDate === 'number') {
+            const d = XLSX.SSF.parse_date_code(rawDate);
+            dateStr = `${d.y}-${String(d.m).padStart(2, '0')}-${String(d.d).padStart(2, '0')}`;
+          } else if (rawDate) {
+            dateStr = rawDate;
+          }
+
+          return {
+            id: `stmt_${i}_${Date.now()}`,
+            date: dateStr,
+            description: String(desc),
+            reference: ref ? String(ref) : undefined,
+            amount: finalAmount,
+            direction,
+            balance: balance || undefined,
+            matched: false,
+          };
+        });
+
+        setStatementRows(rows);
+        toast({ title: 'Extracto importado', description: `${rows.length} linhas carregadas` });
+        setImportDialogOpen(false);
+      } catch (err) {
+        toast({ title: 'Erro na importação', description: 'Formato do ficheiro não reconhecido', variant: 'destructive' });
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  }, [toast]);
+
+  // ==================== AUTO-MATCH ====================
+
+  const autoMatch = useCallback(() => {
+    if (!accountTransactions.length || !statementRows.length) return;
+
+    let matchCount = 0;
+    const updated = statementRows.map(row => {
+      if (row.matched) return row;
+
+      // Try exact amount + date match
+      const candidates = accountTransactions.filter(t =>
+        !matchedTxnIds.has(t.id) &&
+        Math.abs(t.amount - row.amount) < 0.01 &&
+        t.direction === row.direction
+      );
+
+      // Score candidates
+      let best: BankTransaction | null = null;
+      let bestScore = 0;
+
+      for (const c of candidates) {
+        let score = 50; // Base: amount match
+        if (c.transactionDate === row.date) score += 30;
+        if (c.bankReference && row.reference && c.bankReference === row.reference) score += 20;
+        if (c.description.toLowerCase().includes(row.description.toLowerCase().slice(0, 10))) score += 10;
+        if (score > bestScore) { bestScore = score; best = c; }
+      }
+
+      if (best && bestScore >= 50) {
+        matchCount++;
+        matchedTxnIds.add(best.id);
+        return { ...row, matched: true, matchedTransactionId: best.id, matchConfidence: bestScore };
+      }
+      return row;
+    });
+
+    setStatementRows(updated);
+    toast({ title: 'Auto-conciliação', description: `${matchCount} transacções conciliadas automaticamente` });
+  }, [accountTransactions, statementRows, matchedTxnIds, toast]);
+
+  // ==================== MANUAL MATCH ====================
+
+  const [manualMatchRow, setManualMatchRow] = useState<BankStatementRow | null>(null);
+
+  const handleManualMatch = (row: BankStatementRow, txnId: string) => {
+    setStatementRows(prev => prev.map(r =>
+      r.id === row.id ? { ...r, matched: true, matchedTransactionId: txnId, matchConfidence: 100 } : r
+    ));
+    setManualMatchRow(null);
+    toast({ title: 'Conciliado', description: 'Transacção conciliada manualmente' });
+  };
+
+  const handleUnmatch = (rowId: string) => {
+    setStatementRows(prev => prev.map(r =>
+      r.id === rowId ? { ...r, matched: false, matchedTransactionId: undefined, matchConfidence: undefined } : r
+    ));
+  };
+
+  // ==================== FILTERED ROWS ====================
+
+  const filteredStatementRows = useMemo(() => {
+    let rows = statementRows;
+    if (searchTerm) {
+      const term = searchTerm.toLowerCase();
+      rows = rows.filter(r => r.description.toLowerCase().includes(term) || r.reference?.toLowerCase().includes(term));
+    }
+    if (activeTab === 'unmatched') return rows.filter(r => !r.matched);
+    if (activeTab === 'matched') return rows.filter(r => r.matched);
+    return rows;
+  }, [statementRows, searchTerm, activeTab]);
+
+  const getCurrencySymbol = (currency?: string) => {
+    switch (currency) { case 'USD': return '$'; case 'EUR': return '€'; default: return 'Kz'; }
+  };
+
+  // ==================== RENDER ====================
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold">Reconciliação Bancária</h1>
+          <p className="text-muted-foreground">Compare extractos bancários com transacções registadas</p>
+        </div>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => setImportDialogOpen(true)} className="gap-2">
+            <Upload className="w-4 h-4" />
+            Importar Extracto
+          </Button>
+          {statementRows.length > 0 && (
+            <Button onClick={autoMatch} className="gap-2">
+              <ArrowRightLeft className="w-4 h-4" />
+              Auto-Conciliar
+            </Button>
+          )}
+        </div>
+      </div>
+
+      {/* Account Selector */}
+      <Card>
+        <CardContent className="pt-4">
+          <div className="flex flex-col sm:flex-row gap-4 items-end">
+            <div className="flex-1 space-y-2">
+              <Label>Conta Bancária</Label>
+              <Select value={selectedAccountId} onValueChange={setSelectedAccountId}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Selecionar conta..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {accounts.map(acc => (
+                    <SelectItem key={acc.id} value={acc.id}>
+                      {acc.bankName.split(' - ')[0]} — {acc.accountNumber} ({acc.currency})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Data Início</Label>
+              <Input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
+            </div>
+            <div className="space-y-2">
+              <Label>Data Fim</Label>
+              <Input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} />
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Summary Cards */}
+      {statementRows.length > 0 && (
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+          <Card>
+            <CardContent className="pt-4 text-center">
+              <FileSpreadsheet className="w-6 h-6 mx-auto text-muted-foreground mb-1" />
+              <div className="text-2xl font-bold">{summary.statementRows}</div>
+              <div className="text-xs text-muted-foreground">Linhas Extracto</div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="pt-4 text-center">
+              <CheckCircle2 className="w-6 h-6 mx-auto text-emerald-500 mb-1" />
+              <div className="text-2xl font-bold text-emerald-600">{summary.matched}</div>
+              <div className="text-xs text-muted-foreground">Conciliadas</div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="pt-4 text-center">
+              <AlertTriangle className="w-6 h-6 mx-auto text-orange-500 mb-1" />
+              <div className="text-2xl font-bold text-orange-600">{summary.unmatched}</div>
+              <div className="text-xs text-muted-foreground">Pendentes</div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="pt-4 text-center">
+              <XCircle className="w-6 h-6 mx-auto text-destructive mb-1" />
+              <div className="text-2xl font-bold">{summary.systemOnly}</div>
+              <div className="text-xs text-muted-foreground">Só no Sistema</div>
+            </CardContent>
+          </Card>
+          <Card className={Math.abs(summary.difference) < 0.01 ? 'border-emerald-500' : 'border-destructive'}>
+            <CardContent className="pt-4 text-center">
+              <Scale className="w-6 h-6 mx-auto mb-1" />
+              <div className={`text-2xl font-bold ${Math.abs(summary.difference) < 0.01 ? 'text-emerald-600' : 'text-destructive'}`}>
+                {getCurrencySymbol(selectedAccount?.currency)} {Math.abs(summary.difference).toLocaleString('pt-AO', { minimumFractionDigits: 2 })}
+              </div>
+              <div className="text-xs text-muted-foreground">
+                {Math.abs(summary.difference) < 0.01 ? 'Conciliado ✓' : 'Diferença'}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* Main Content */}
+      {selectedAccountId && (
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle>Transacções</CardTitle>
+                <CardDescription>
+                  {statementRows.length > 0
+                    ? 'Compare extracto bancário com transacções do sistema'
+                    : 'Importe um extracto bancário para iniciar a conciliação'}
+                </CardDescription>
+              </div>
+              <div className="relative w-64">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                <Input
+                  placeholder="Pesquisar..."
+                  value={searchTerm}
+                  onChange={e => setSearchTerm(e.target.value)}
+                  className="pl-9"
+                />
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {statementRows.length > 0 ? (
+              <Tabs value={activeTab} onValueChange={setActiveTab}>
+                <TabsList>
+                  <TabsTrigger value="all">
+                    Todas ({statementRows.length})
+                  </TabsTrigger>
+                  <TabsTrigger value="unmatched">
+                    Pendentes ({statementRows.filter(r => !r.matched).length})
+                  </TabsTrigger>
+                  <TabsTrigger value="matched">
+                    Conciliadas ({statementRows.filter(r => r.matched).length})
+                  </TabsTrigger>
+                </TabsList>
+                <TabsContent value={activeTab} className="mt-4">
+                  <ScrollArea className="max-h-[500px]">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="w-10">Status</TableHead>
+                          <TableHead>Data</TableHead>
+                          <TableHead>Descrição</TableHead>
+                          <TableHead>Referência</TableHead>
+                          <TableHead className="text-right">Valor</TableHead>
+                          <TableHead className="text-right">Saldo</TableHead>
+                          <TableHead className="w-28">Acção</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {filteredStatementRows.map(row => (
+                          <TableRow key={row.id} className={row.matched ? 'bg-emerald-50/50 dark:bg-emerald-950/20' : ''}>
+                            <TableCell>
+                              {row.matched ? (
+                                <CheckCircle2 className="w-5 h-5 text-emerald-500" />
+                              ) : (
+                                <AlertTriangle className="w-5 h-5 text-orange-500" />
+                              )}
+                            </TableCell>
+                            <TableCell className="whitespace-nowrap text-sm">{row.date}</TableCell>
+                            <TableCell className="text-sm max-w-48 truncate">{row.description}</TableCell>
+                            <TableCell className="text-sm text-muted-foreground">{row.reference || '—'}</TableCell>
+                            <TableCell className={`text-right font-medium ${row.direction === 'in' ? 'text-emerald-600' : 'text-destructive'}`}>
+                              {row.direction === 'in' ? '+' : '-'}{row.amount.toLocaleString('pt-AO', { minimumFractionDigits: 2 })}
+                            </TableCell>
+                            <TableCell className="text-right text-sm text-muted-foreground">
+                              {row.balance?.toLocaleString('pt-AO', { minimumFractionDigits: 2 }) || '—'}
+                            </TableCell>
+                            <TableCell>
+                              {row.matched ? (
+                                <Button variant="ghost" size="sm" onClick={() => handleUnmatch(row.id)}>
+                                  <Unlink className="w-4 h-4 mr-1" />
+                                  Desfazer
+                                </Button>
+                              ) : (
+                                <Button variant="outline" size="sm" onClick={() => setManualMatchRow(row)}>
+                                  <Link2 className="w-4 h-4 mr-1" />
+                                  Conciliar
+                                </Button>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                        {filteredStatementRows.length === 0 && (
+                          <TableRow>
+                            <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
+                              Nenhuma transacção {activeTab === 'unmatched' ? 'pendente' : activeTab === 'matched' ? 'conciliada' : ''}
+                            </TableCell>
+                          </TableRow>
+                        )}
+                      </TableBody>
+                    </Table>
+                  </ScrollArea>
+                </TabsContent>
+              </Tabs>
+            ) : (
+              // Show system transactions when no statement imported
+              <ScrollArea className="max-h-[400px]">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Data</TableHead>
+                      <TableHead>Descrição</TableHead>
+                      <TableHead>Referência</TableHead>
+                      <TableHead className="text-right">Valor</TableHead>
+                      <TableHead className="text-right">Saldo</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {accountTransactions.map(txn => (
+                      <TableRow key={txn.id}>
+                        <TableCell className="whitespace-nowrap text-sm">{txn.transactionDate}</TableCell>
+                        <TableCell className="text-sm">{txn.description}</TableCell>
+                        <TableCell className="text-sm text-muted-foreground">{txn.referenceNumber || '—'}</TableCell>
+                        <TableCell className={`text-right font-medium ${txn.direction === 'in' ? 'text-emerald-600' : 'text-destructive'}`}>
+                          {txn.direction === 'in' ? '+' : '-'}{txn.amount.toLocaleString('pt-AO', { minimumFractionDigits: 2 })}
+                        </TableCell>
+                        <TableCell className="text-right text-sm">{txn.balanceAfter.toLocaleString('pt-AO', { minimumFractionDigits: 2 })}</TableCell>
+                      </TableRow>
+                    ))}
+                    {accountTransactions.length === 0 && (
+                      <TableRow>
+                        <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
+                          Nenhuma transacção registada nesta conta
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </ScrollArea>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {!selectedAccountId && (
+        <Card>
+          <CardContent className="py-16 text-center">
+            <Scale className="w-12 h-12 mx-auto text-muted-foreground mb-4" />
+            <h3 className="text-lg font-medium mb-2">Selecione uma conta bancária</h3>
+            <p className="text-muted-foreground">Escolha uma conta acima para iniciar a reconciliação</p>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Import Dialog */}
+      <Dialog open={importDialogOpen} onOpenChange={setImportDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <FileSpreadsheet className="w-5 h-5" />
+              Importar Extracto Bancário
+            </DialogTitle>
+            <DialogDescription>
+              Importe um ficheiro Excel (.xlsx) com o extracto do banco
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="border-2 border-dashed rounded-lg p-8 text-center">
+              <Upload className="w-10 h-10 mx-auto text-muted-foreground mb-4" />
+              <Label htmlFor="statement-file" className="cursor-pointer">
+                <span className="text-primary font-medium">Clique para selecionar</span>
+                <span className="text-muted-foreground"> ou arraste o ficheiro</span>
+              </Label>
+              <Input
+                id="statement-file"
+                type="file"
+                accept=".xlsx,.xls,.csv"
+                className="hidden"
+                onChange={handleFileUpload}
+              />
+              <p className="text-xs text-muted-foreground mt-2">
+                Suporta: .xlsx, .xls, .csv
+              </p>
+            </div>
+            <Card className="bg-muted/50">
+              <CardContent className="pt-4">
+                <p className="text-sm font-medium mb-2">Colunas esperadas:</p>
+                <div className="grid grid-cols-2 gap-1 text-xs text-muted-foreground">
+                  <span>• Data / Date</span>
+                  <span>• Descrição / Description</span>
+                  <span>• Crédito / Credit</span>
+                  <span>• Débito / Debit</span>
+                  <span>• Referência / Reference</span>
+                  <span>• Saldo / Balance</span>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Manual Match Dialog */}
+      <Dialog open={!!manualMatchRow} onOpenChange={() => setManualMatchRow(null)}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Conciliação Manual</DialogTitle>
+            <DialogDescription>
+              Selecione a transacção do sistema que corresponde a esta linha do extracto
+            </DialogDescription>
+          </DialogHeader>
+          {manualMatchRow && (
+            <div className="space-y-4">
+              {/* Statement row info */}
+              <Card className="bg-primary/5">
+                <CardContent className="pt-4">
+                  <div className="flex justify-between items-center">
+                    <div>
+                      <p className="font-medium">{manualMatchRow.description}</p>
+                      <p className="text-sm text-muted-foreground">{manualMatchRow.date} • Ref: {manualMatchRow.reference || '—'}</p>
+                    </div>
+                    <span className={`text-lg font-bold ${manualMatchRow.direction === 'in' ? 'text-emerald-600' : 'text-destructive'}`}>
+                      {manualMatchRow.direction === 'in' ? '+' : '-'}{manualMatchRow.amount.toLocaleString('pt-AO', { minimumFractionDigits: 2 })}
+                    </span>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Separator />
+
+              {/* System transactions to match against */}
+              <ScrollArea className="max-h-64">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Data</TableHead>
+                      <TableHead>Descrição</TableHead>
+                      <TableHead className="text-right">Valor</TableHead>
+                      <TableHead className="w-24">Acção</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {unmatchedSystemTxns.map(txn => (
+                      <TableRow key={txn.id}>
+                        <TableCell className="text-sm">{txn.transactionDate}</TableCell>
+                        <TableCell className="text-sm">{txn.description}</TableCell>
+                        <TableCell className={`text-right font-medium ${txn.direction === 'in' ? 'text-emerald-600' : 'text-destructive'}`}>
+                          {txn.direction === 'in' ? '+' : '-'}{txn.amount.toLocaleString('pt-AO', { minimumFractionDigits: 2 })}
+                        </TableCell>
+                        <TableCell>
+                          <Button size="sm" onClick={() => handleManualMatch(manualMatchRow, txn.id)}>
+                            <Link2 className="w-4 h-4 mr-1" />
+                            Conciliar
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                    {unmatchedSystemTxns.length === 0 && (
+                      <TableRow>
+                        <TableCell colSpan={4} className="text-center py-6 text-muted-foreground">
+                          Sem transacções disponíveis para conciliar
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </ScrollArea>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}

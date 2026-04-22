@@ -1,0 +1,167 @@
+// Kwanza ERP - User Roles & Permissions System
+// Every button, every tab, every action is permission-controlled
+
+export type UserRole = 'admin' | 'manager' | 'cashier' | 'viewer';
+
+export interface Permission {
+  id: string;
+  name: string;
+  description: string;
+  category: 'sales' | 'inventory' | 'reports' | 'admin' | 'fiscal' | 'accounting' | 'stock' | 'hr';
+}
+
+export interface RolePermissions {
+  role: UserRole;
+  permissions: string[];
+}
+
+// ==================== ALL PERMISSIONS ====================
+export const PERMISSIONS: Permission[] = [
+  // Sales & POS
+  { id: 'pos_access', name: 'POS Access', description: 'Acesso ao Ponto de Venda', category: 'sales' },
+  { id: 'pos_discount', name: 'Apply Discounts', description: 'Aplicar descontos', category: 'sales' },
+  { id: 'pos_void', name: 'Void Sales', description: 'Anular vendas', category: 'sales' },
+  { id: 'pos_refund', name: 'Process Refunds', description: 'Processar devoluções', category: 'sales' },
+  { id: 'pos_price_change', name: 'Change Prices at POS', description: 'Alterar preços no POS', category: 'sales' },
+
+  // Invoicing / Faturação
+  { id: 'invoice_create', name: 'Create Invoice', description: 'Criar fatura de venda', category: 'fiscal' },
+  { id: 'invoice_view', name: 'View Invoices', description: 'Visualizar faturas', category: 'fiscal' },
+  { id: 'invoice_delete', name: 'Delete Invoice', description: 'Eliminar faturas', category: 'fiscal' },
+  { id: 'invoice_print', name: 'Print Invoice', description: 'Imprimir faturas', category: 'fiscal' },
+  { id: 'proforma_create', name: 'Create Proforma', description: 'Criar pro-forma', category: 'fiscal' },
+  { id: 'proforma_convert', name: 'Convert Proforma', description: 'Converter pro-forma em fatura', category: 'fiscal' },
+  { id: 'credit_note_create', name: 'Credit Notes', description: 'Criar notas de crédito', category: 'fiscal' },
+  { id: 'debit_note_create', name: 'Debit Notes', description: 'Criar notas de débito', category: 'fiscal' },
+  { id: 'receipt_create', name: 'Create Receipt', description: 'Criar recibos', category: 'fiscal' },
+  { id: 'agt_send', name: 'AGT Send', description: 'Enviar documentos ao AGT', category: 'fiscal' },
+  { id: 'saft_export', name: 'SAF-T Export', description: 'Exportar SAF-T', category: 'fiscal' },
+
+  // Accounting / Contabilidade
+  { id: 'accounting_view', name: 'View Accounts', description: 'Visualizar mapa de contas', category: 'accounting' },
+  { id: 'accounting_create', name: 'Create Entries', description: 'Criar lançamentos', category: 'accounting' },
+  { id: 'accounting_journal', name: 'Journal Access', description: 'Acesso aos diários', category: 'accounting' },
+  { id: 'accounting_payment', name: 'Process Payment', description: 'Processar pagamentos', category: 'accounting' },
+  { id: 'accounting_receipt', name: 'Process Receipt', description: 'Processar recebimentos', category: 'accounting' },
+  { id: 'caixa_open', name: 'Open Caixa', description: 'Abrir caixa', category: 'accounting' },
+  { id: 'caixa_close', name: 'Close Caixa', description: 'Fechar caixa', category: 'accounting' },
+  { id: 'bank_manage', name: 'Manage Banks', description: 'Gerir contas bancárias', category: 'accounting' },
+  { id: 'expense_create', name: 'Create Expense', description: 'Registar despesas', category: 'accounting' },
+  { id: 'expense_approve', name: 'Approve Expense', description: 'Aprovar despesas', category: 'accounting' },
+
+  // Inventory / Stock
+  { id: 'inventory_view', name: 'View Inventory', description: 'Visualizar stock', category: 'inventory' },
+  { id: 'inventory_create', name: 'Create Products', description: 'Adicionar produtos', category: 'inventory' },
+  { id: 'inventory_edit', name: 'Edit Products', description: 'Modificar produtos', category: 'inventory' },
+  { id: 'inventory_delete', name: 'Delete Products', description: 'Eliminar produtos', category: 'inventory' },
+  { id: 'inventory_adjust', name: 'Adjust Stock', description: 'Ajustar quantidades', category: 'stock' },
+  { id: 'inventory_transfer', name: 'Transfer Stock', description: 'Transferir entre filiais', category: 'stock' },
+  { id: 'inventory_import', name: 'Import Products', description: 'Importar do Excel', category: 'inventory' },
+  { id: 'inventory_export', name: 'Export Products', description: 'Exportar para Excel', category: 'inventory' },
+  { id: 'price_view', name: 'View Prices', description: 'Visualizar preços de custo', category: 'inventory' },
+  { id: 'price_edit', name: 'Edit Prices', description: 'Modificar preços', category: 'inventory' },
+  { id: 'purchase_create', name: 'Create PO', description: 'Criar ordem de compra', category: 'stock' },
+  { id: 'purchase_approve', name: 'Approve PO', description: 'Aprovar ordem de compra', category: 'stock' },
+  { id: 'purchase_receive', name: 'Receive PO', description: 'Receber mercadoria', category: 'stock' },
+
+  // Reports
+  { id: 'reports_daily', name: 'Daily Reports', description: 'Relatórios diários', category: 'reports' },
+  { id: 'reports_close', name: 'Close Day', description: 'Fechar dia', category: 'reports' },
+  { id: 'reports_financial', name: 'Financial Reports', description: 'Relatórios financeiros', category: 'reports' },
+  { id: 'reports_audit', name: 'Audit Trail', description: 'Histórico de auditoria', category: 'reports' },
+  { id: 'reports_stock', name: 'Stock Reports', description: 'Relatórios de stock', category: 'reports' },
+  { id: 'reports_client_statement', name: 'Client Statement', description: 'Extracto de cliente', category: 'reports' },
+  { id: 'reports_supplier_statement', name: 'Supplier Statement', description: 'Extracto de fornecedor', category: 'reports' },
+
+  // Admin
+  { id: 'admin_users', name: 'Manage Users', description: 'Gerir utilizadores', category: 'admin' },
+  { id: 'admin_roles', name: 'Manage Roles', description: 'Atribuir funções', category: 'admin' },
+  { id: 'admin_permissions', name: 'Manage Permissions', description: 'Gerir permissões', category: 'admin' },
+  { id: 'admin_branches', name: 'Manage Branches', description: 'Gerir filiais', category: 'admin' },
+  { id: 'admin_settings', name: 'System Settings', description: 'Configurações do sistema', category: 'admin' },
+  { id: 'admin_backup', name: 'Backup Data', description: 'Cópia de segurança', category: 'admin' },
+  { id: 'admin_restore', name: 'Restore Data', description: 'Restaurar dados', category: 'admin' },
+
+  // HR
+  { id: 'hr_view', name: 'View HR', description: 'Visualizar RH', category: 'hr' },
+  { id: 'hr_manage', name: 'Manage HR', description: 'Gerir RH', category: 'hr' },
+];
+
+// Default permissions by role
+export const DEFAULT_ROLE_PERMISSIONS: RolePermissions[] = [
+  {
+    role: 'admin',
+    permissions: PERMISSIONS.map(p => p.id), // All permissions
+  },
+  {
+    role: 'manager',
+    permissions: [
+      'pos_access', 'pos_discount', 'pos_void', 'pos_refund', 'pos_price_change',
+      'invoice_create', 'invoice_view', 'invoice_print', 'proforma_create', 'proforma_convert',
+      'credit_note_create', 'debit_note_create', 'receipt_create', 'agt_send',
+      'accounting_view', 'accounting_create', 'accounting_journal', 'accounting_payment', 'accounting_receipt',
+      'caixa_open', 'caixa_close', 'bank_manage', 'expense_create',
+      'inventory_view', 'inventory_create', 'inventory_edit', 'inventory_adjust', 'inventory_transfer',
+      'inventory_import', 'inventory_export', 'price_view', 'price_edit',
+      'purchase_create', 'purchase_receive',
+      'reports_daily', 'reports_close', 'reports_financial', 'reports_stock',
+      'reports_client_statement', 'reports_supplier_statement',
+    ],
+  },
+  {
+    role: 'cashier',
+    permissions: [
+      'pos_access', 'pos_discount',
+      'invoice_view', 'invoice_print', 'receipt_create',
+      'accounting_view', 'caixa_open',
+      'inventory_view',
+      'reports_daily',
+    ],
+  },
+  {
+    role: 'viewer',
+    permissions: [
+      'invoice_view',
+      'accounting_view',
+      'inventory_view',
+      'reports_daily',
+    ],
+  },
+];
+
+// Role display names (Portuguese)
+export const ROLE_NAMES: Record<UserRole, string> = {
+  admin: 'Administrador',
+  manager: 'Gestor',
+  cashier: 'Caixa',
+  viewer: 'Visualizador',
+};
+
+// Role colors
+export const ROLE_COLORS: Record<UserRole, string> = {
+  admin: 'bg-destructive text-destructive-foreground',
+  manager: 'bg-primary text-primary-foreground',
+  cashier: 'bg-secondary text-secondary-foreground',
+  viewer: 'bg-muted text-muted-foreground',
+};
+
+// Helper: Check if a role has a specific permission
+export function roleHasPermission(role: UserRole, permissionId: string): boolean {
+  const rolePerms = DEFAULT_ROLE_PERMISSIONS.find(rp => rp.role === role);
+  return rolePerms?.permissions.includes(permissionId) ?? false;
+}
+
+// Helper: Get all permissions for a role grouped by category
+export function getPermissionsByCategory(role: UserRole) {
+  const rolePerms = DEFAULT_ROLE_PERMISSIONS.find(rp => rp.role === role);
+  const granted = new Set(rolePerms?.permissions || []);
+
+  const categories = [...new Set(PERMISSIONS.map(p => p.category))];
+  return categories.map(cat => ({
+    category: cat,
+    permissions: PERMISSIONS.filter(p => p.category === cat).map(p => ({
+      ...p,
+      granted: granted.has(p.id),
+    })),
+  }));
+}

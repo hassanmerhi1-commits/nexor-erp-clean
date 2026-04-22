@@ -1,0 +1,601 @@
+import { useState } from 'react';
+import { useProducts, useStockTransfers, useAuth } from '@/hooks/useERP';
+import { useBranchContext } from '@/contexts/BranchContext';
+import { Product, StockTransfer as StockTransferType } from '@/types/erp';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Badge } from '@/components/ui/badge';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Textarea } from '@/components/ui/textarea';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { ArrowRightLeft, Plus, Package, Check, X, Truck, Clock } from 'lucide-react';
+import { format } from 'date-fns';
+import { pt } from 'date-fns/locale';
+import { useToast } from '@/hooks/use-toast';
+
+interface TransferItem {
+  productId: string;
+  productName: string;
+  sku: string;
+  quantity: number;
+  availableStock: number;
+}
+
+export default function StockTransfer() {
+  const { user } = useAuth();
+  const { branches, currentBranch } = useBranchContext();
+  // Load ALL transfers (not branch-filtered) so we can see transfers between any branches
+  const { transfers, createTransfer, approveTransfer, receiveTransfer, cancelTransfer } = useStockTransfers();
+  const { toast } = useToast();
+
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [receiveDialogOpen, setReceiveDialogOpen] = useState(false);
+  const [selectedTransfer, setSelectedTransfer] = useState<StockTransferType | null>(null);
+  const [fromBranchId, setFromBranchId] = useState(currentBranch?.id || '');
+  const [toBranchId, setToBranchId] = useState('');
+  const [notes, setNotes] = useState('');
+  const [transferItems, setTransferItems] = useState<TransferItem[]>([]);
+  const [receivedQuantities, setReceivedQuantities] = useState<Record<string, number>>({});
+
+  // Load products from the selected SOURCE branch
+  const { products: sourceProducts } = useProducts(fromBranchId || undefined);
+
+  const pendingTransfers = transfers.filter(t => t.status === 'pending');
+  const inTransitTransfers = transfers.filter(t => t.status === 'in_transit');
+  const completedTransfers = transfers.filter(t => t.status === 'received' || t.status === 'cancelled');
+
+  const resetForm = () => {
+    setFromBranchId(currentBranch?.id || '');
+    setToBranchId('');
+    setNotes('');
+    setTransferItems([]);
+  };
+
+  const handleAddProduct = (product: Product) => {
+    if (transferItems.find(item => item.productId === product.id)) {
+      toast({
+        title: 'Produto já adicionado',
+        description: 'Este produto já está na lista de transferência',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    setTransferItems([
+      ...transferItems,
+      {
+        productId: product.id,
+        productName: product.name,
+        sku: product.sku,
+        quantity: 1,
+        availableStock: product.stock,
+      },
+    ]);
+  };
+
+  // Clear items when source branch changes
+  const handleFromBranchChange = (branchId: string) => {
+    setFromBranchId(branchId);
+    setTransferItems([]);
+    // Reset destination if same as new source
+    if (toBranchId === branchId) setToBranchId('');
+  };
+
+  const updateItemQuantity = (productId: string, quantity: number) => {
+    setTransferItems(items =>
+      items.map(item =>
+        item.productId === productId
+          ? { ...item, quantity: Math.min(quantity, item.availableStock) }
+          : item
+      )
+    );
+  };
+
+  const removeItem = (productId: string) => {
+    setTransferItems(items => items.filter(item => item.productId !== productId));
+  };
+
+  const handleCreateTransfer = async () => {
+    if (!fromBranchId || !toBranchId || transferItems.length === 0 || !user) {
+      toast({
+        title: 'Erro',
+        description: 'Preencha todos os campos obrigatórios',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    try {
+      await createTransfer(
+        fromBranchId,
+        toBranchId,
+        transferItems.map(item => ({
+          productId: item.productId,
+          productName: item.productName,
+          sku: item.sku,
+          quantity: item.quantity,
+        })),
+        user.id,
+        notes
+      );
+
+      toast({
+        title: 'Transferência criada',
+        description: 'A requisição de transferência foi criada com sucesso',
+      });
+
+      setDialogOpen(false);
+      resetForm();
+    } catch (error: any) {
+      toast({
+        title: 'Erro',
+        description: error?.message || 'Falha ao criar transferência',
+        variant: 'destructive',
+      });
+    }
+  };
+
+  const handleApprove = async (transfer: StockTransferType) => {
+    if (!user) return;
+    try {
+      await approveTransfer(transfer.id, user.id);
+      toast({
+        title: 'Transferência aprovada',
+        description: 'Os produtos foram deduzidos do stock de origem',
+      });
+    } catch (error: any) {
+      toast({
+        title: 'Erro',
+        description: error?.message || 'Falha ao aprovar transferência',
+        variant: 'destructive',
+      });
+    }
+  };
+
+  const handleOpenReceiveDialog = (transfer: StockTransferType) => {
+    setSelectedTransfer(transfer);
+    const quantities: Record<string, number> = {};
+    transfer.items.forEach(item => {
+      quantities[item.productId] = item.quantity;
+    });
+    setReceivedQuantities(quantities);
+    setReceiveDialogOpen(true);
+  };
+
+  const handleReceive = async () => {
+    if (!selectedTransfer || !user) return;
+    try {
+      await receiveTransfer(selectedTransfer.id, user.id, receivedQuantities);
+      toast({
+        title: 'Transferência recebida',
+        description: 'Os produtos foram adicionados ao stock de destino',
+      });
+      setReceiveDialogOpen(false);
+      setSelectedTransfer(null);
+    } catch (error: any) {
+      toast({
+        title: 'Erro',
+        description: error?.message || 'Falha ao receber transferência',
+        variant: 'destructive',
+      });
+    }
+  };
+
+  const handleCancel = async (transfer: StockTransferType) => {
+    if (!user) return;
+    try {
+      await cancelTransfer(transfer.id, user.id);
+      toast({
+        title: 'Transferência cancelada',
+        description: 'A requisição foi cancelada',
+      });
+    } catch (error: any) {
+      toast({
+        title: 'Erro',
+        description: error?.message || 'Falha ao cancelar transferência',
+        variant: 'destructive',
+      });
+    }
+  };
+
+  const getStatusBadge = (status: StockTransferType['status']) => {
+    switch (status) {
+      case 'pending':
+        return <Badge variant="secondary"><Clock className="w-3 h-3 mr-1" />Pendente</Badge>;
+      case 'in_transit':
+        return <Badge variant="default"><Truck className="w-3 h-3 mr-1" />Em Trânsito</Badge>;
+      case 'received':
+        return <Badge className="bg-green-500"><Check className="w-3 h-3 mr-1" />Recebido</Badge>;
+      case 'cancelled':
+        return <Badge variant="destructive"><X className="w-3 h-3 mr-1" />Cancelado</Badge>;
+    }
+  };
+
+  const destinationBranches = branches.filter(b => b.id !== fromBranchId);
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+        <div>
+          <h1 className="text-2xl font-bold">Transferência de Stock</h1>
+          <p className="text-muted-foreground">Movimentação de produtos entre filiais</p>
+        </div>
+        <Button onClick={() => setDialogOpen(true)}>
+          <Plus className="w-4 h-4 mr-2" />
+          Nova Transferência
+        </Button>
+      </div>
+
+      {/* Summary Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between pb-2">
+            <CardTitle className="text-sm font-medium">Pendentes</CardTitle>
+            <Clock className="w-4 h-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{pendingTransfers.length}</div>
+            <p className="text-xs text-muted-foreground">aguardando aprovação</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between pb-2">
+            <CardTitle className="text-sm font-medium">Em Trânsito</CardTitle>
+            <Truck className="w-4 h-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{inTransitTransfers.length}</div>
+            <p className="text-xs text-muted-foreground">a caminho</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between pb-2">
+            <CardTitle className="text-sm font-medium">Total Transferido</CardTitle>
+            <ArrowRightLeft className="w-4 h-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{completedTransfers.filter(t => t.status === 'received').length}</div>
+            <p className="text-xs text-muted-foreground">concluídas</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between pb-2">
+            <CardTitle className="text-sm font-medium">Produtos em Falta</CardTitle>
+            <Package className="w-4 h-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{sourceProducts.filter(p => p.stock <= 10).length}</div>
+            <p className="text-xs text-muted-foreground">stock baixo</p>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Transfers Tabs */}
+      <Tabs defaultValue="pending" className="space-y-4">
+        <TabsList>
+          <TabsTrigger value="pending">
+            Pendentes ({pendingTransfers.length})
+          </TabsTrigger>
+          <TabsTrigger value="transit">
+            Em Trânsito ({inTransitTransfers.length})
+          </TabsTrigger>
+          <TabsTrigger value="completed">
+            Concluídas ({completedTransfers.length})
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="pending">
+          <Card>
+            <CardHeader>
+              <CardTitle>Transferências Pendentes</CardTitle>
+              <CardDescription>Aguardando aprovação para envio</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <TransferTable
+                transfers={pendingTransfers}
+                getStatusBadge={getStatusBadge}
+                onApprove={handleApprove}
+                onCancel={handleCancel}
+                currentBranchId={currentBranch?.id}
+              />
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="transit">
+          <Card>
+            <CardHeader>
+              <CardTitle>Em Trânsito</CardTitle>
+              <CardDescription>Produtos a caminho do destino</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <TransferTable
+                transfers={inTransitTransfers}
+                getStatusBadge={getStatusBadge}
+                onReceive={handleOpenReceiveDialog}
+                currentBranchId={currentBranch?.id}
+              />
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="completed">
+          <Card>
+            <CardHeader>
+              <CardTitle>Transferências Concluídas</CardTitle>
+              <CardDescription>Histórico de transferências</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <TransferTable
+                transfers={completedTransfers}
+                getStatusBadge={getStatusBadge}
+                currentBranchId={currentBranch?.id}
+              />
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
+
+      {/* New Transfer Dialog */}
+      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Nova Transferência</DialogTitle>
+            <DialogDescription>
+              Selecione os produtos e a filial de destino
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>De (Origem):</Label>
+                <Select value={fromBranchId} onValueChange={handleFromBranchChange}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Selecione a filial de origem" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {branches.map(branch => (
+                      <SelectItem key={branch.id} value={branch.id}>
+                        {branch.name} {branch.isMain && '(Sede)'}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Para (Destino):</Label>
+                <Select value={toBranchId} onValueChange={setToBranchId}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Selecione a filial de destino" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {destinationBranches.map(branch => (
+                      <SelectItem key={branch.id} value={branch.id}>
+                        {branch.name} {branch.isMain && '(Sede)'}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label>Adicionar Produtos (do stock de {branches.find(b => b.id === fromBranchId)?.name || '...'}):</Label>
+              <Select onValueChange={(value) => {
+                const product = sourceProducts.find(p => p.id === value);
+                if (product) handleAddProduct(product);
+              }}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Selecione um produto" />
+                </SelectTrigger>
+                <SelectContent>
+                  {sourceProducts.filter(p => p.stock > 0).map(product => (
+                    <SelectItem key={product.id} value={product.id}>
+                      {product.name} - Stock: {product.stock}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {transferItems.length > 0 && (
+              <div className="border rounded-lg">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Produto</TableHead>
+                      <TableHead>SKU</TableHead>
+                      <TableHead>Disponível</TableHead>
+                      <TableHead>Quantidade</TableHead>
+                      <TableHead></TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {transferItems.map(item => (
+                      <TableRow key={item.productId}>
+                        <TableCell>{item.productName}</TableCell>
+                        <TableCell>{item.sku}</TableCell>
+                        <TableCell>{item.availableStock}</TableCell>
+                        <TableCell>
+                          <Input
+                            type="number"
+                            min={1}
+                            max={item.availableStock}
+                            value={item.quantity}
+                            onChange={(e) => updateItemQuantity(item.productId, parseInt(e.target.value) || 1)}
+                            className="w-20"
+                          />
+                        </TableCell>
+                        <TableCell>
+                          <Button size="sm" variant="ghost" onClick={() => removeItem(item.productId)}>
+                            <X className="w-4 h-4" />
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+
+            <div className="space-y-2">
+              <Label>Observações:</Label>
+              <Textarea
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                placeholder="Notas adicionais sobre a transferência..."
+                rows={2}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDialogOpen(false)}>
+              Cancelar
+            </Button>
+            <Button onClick={handleCreateTransfer} disabled={transferItems.length === 0 || !toBranchId || !fromBranchId}>
+              <ArrowRightLeft className="w-4 h-4 mr-2" />
+              Criar Transferência
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Receive Dialog */}
+      <Dialog open={receiveDialogOpen} onOpenChange={setReceiveDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Receber Transferência</DialogTitle>
+            <DialogDescription>
+              Confirme as quantidades recebidas
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            {selectedTransfer && (
+              <div className="border rounded-lg">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Produto</TableHead>
+                      <TableHead>Enviado</TableHead>
+                      <TableHead>Recebido</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {selectedTransfer.items.map(item => (
+                      <TableRow key={item.productId}>
+                        <TableCell>{item.productName}</TableCell>
+                        <TableCell>{item.quantity}</TableCell>
+                        <TableCell>
+                          <Input
+                            type="number"
+                            min={0}
+                            max={item.quantity}
+                            value={receivedQuantities[item.productId] || 0}
+                            onChange={(e) => setReceivedQuantities({
+                              ...receivedQuantities,
+                              [item.productId]: parseInt(e.target.value) || 0,
+                            })}
+                            className="w-20"
+                          />
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setReceiveDialogOpen(false)}>
+              Cancelar
+            </Button>
+            <Button onClick={handleReceive}>
+              <Check className="w-4 h-4 mr-2" />
+              Confirmar Recebimento
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+// Transfer Table Component
+function TransferTable({
+  transfers,
+  getStatusBadge,
+  onApprove,
+  onReceive,
+  onCancel,
+  currentBranchId,
+}: {
+  transfers: StockTransferType[];
+  getStatusBadge: (status: StockTransferType['status']) => React.ReactNode;
+  onApprove?: (transfer: StockTransferType) => void;
+  onReceive?: (transfer: StockTransferType) => void;
+  onCancel?: (transfer: StockTransferType) => void;
+  currentBranchId?: string;
+}) {
+  if (transfers.length === 0) {
+    return (
+      <div className="text-center py-8 text-muted-foreground">
+        Nenhuma transferência encontrada
+      </div>
+    );
+  }
+
+  return (
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>Número</TableHead>
+          <TableHead>Origem</TableHead>
+          <TableHead>Destino</TableHead>
+          <TableHead>Itens</TableHead>
+          <TableHead>Data</TableHead>
+          <TableHead>Estado</TableHead>
+          <TableHead>Ações</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {transfers.map(transfer => (
+          <TableRow key={transfer.id}>
+            <TableCell className="font-medium">{transfer.transferNumber}</TableCell>
+            <TableCell>{transfer.fromBranchName}</TableCell>
+            <TableCell>{transfer.toBranchName}</TableCell>
+            <TableCell>{transfer.items.length} produtos</TableCell>
+            <TableCell>
+              {format(new Date(transfer.requestedAt), 'dd/MM/yyyy HH:mm', { locale: pt })}
+            </TableCell>
+            <TableCell>{getStatusBadge(transfer.status)}</TableCell>
+            <TableCell>
+              <div className="flex gap-2">
+                {transfer.status === 'pending' && transfer.fromBranchId === currentBranchId && onApprove && (
+                  <Button size="sm" variant="outline" onClick={() => onApprove(transfer)}>
+                    <Check className="w-4 h-4 mr-1" />
+                    Aprovar
+                  </Button>
+                )}
+                {transfer.status === 'in_transit' && onReceive && (
+                  <Button size="sm" variant="outline" onClick={() => onReceive(transfer)}>
+                    <Package className="w-4 h-4 mr-1" />
+                    Confirmar Recepção
+                  </Button>
+                )}
+                {transfer.status === 'pending' && onCancel && (
+                  <Button size="sm" variant="ghost" onClick={() => onCancel(transfer)}>
+                    <X className="w-4 h-4" />
+                  </Button>
+                )}
+              </div>
+            </TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
+  );
+}

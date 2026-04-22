@@ -1,0 +1,120 @@
+// Phase 3 — LAN Security Middleware
+// CORS hardening, rate limiting, and helmet-like headers
+
+/**
+ * LAN-restricted CORS middleware
+ * Allows: localhost, 127.0.0.1, 192.168.x.x, 10.x.x.x, 172.16-31.x.x, Electron file://
+ */
+function lanCors(req, res, next) {
+  const origin = req.headers.origin || '';
+  const allowed = isAllowedOrigin(origin);
+
+  if (allowed || !origin) {
+    res.setHeader('Access-Control-Allow-Origin', origin || '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+
+    if (req.method === 'OPTIONS') {
+      return res.sendStatus(204);
+    }
+  } else {
+    console.warn(`[SECURITY] Blocked origin: ${origin}`);
+    return res.status(403).json({ error: 'Origin not allowed' });
+  }
+
+  next();
+}
+
+function isAllowedOrigin(origin) {
+  if (!origin) return true; // Same-origin or server-to-server
+  try {
+    const url = new URL(origin);
+    const host = url.hostname;
+
+    // Localhost
+    if (host === 'localhost' || host === '127.0.0.1' || host === '::1') return true;
+
+    // Private network ranges
+    if (host.startsWith('192.168.')) return true;
+    if (host.startsWith('10.')) return true;
+    if (/^172\.(1[6-9]|2\d|3[01])\./.test(host)) return true;
+
+    // Electron file://
+    if (url.protocol === 'file:') return true;
+
+    // Lovable preview URLs (for development)
+    if (host.endsWith('.lovable.app')) return true;
+    if (host.endsWith('.lovableproject.com')) return true;
+
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Security headers (lightweight helmet replacement)
+ */
+function securityHeaders(req, res, next) {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.removeHeader('X-Powered-By');
+  next();
+}
+
+/**
+ * Simple in-memory rate limiter
+ * @param {number} windowMs - Time window in ms
+ * @param {number} maxRequests - Max requests per IP per window
+ */
+function rateLimiter(windowMs = 60000, maxRequests = 200) {
+  const hits = new Map();
+
+  // Cleanup every windowMs
+  setInterval(() => {
+    const now = Date.now();
+    for (const [key, data] of hits) {
+      if (now - data.start > windowMs) hits.delete(key);
+    }
+  }, windowMs);
+
+  return (req, res, next) => {
+    const ip = req.ip || req.connection.remoteAddress;
+    const now = Date.now();
+    const record = hits.get(ip);
+
+    if (!record || now - record.start > windowMs) {
+      hits.set(ip, { start: now, count: 1 });
+      return next();
+    }
+
+    record.count++;
+    if (record.count > maxRequests) {
+      console.warn(`[RATE LIMIT] ${ip}: ${record.count}/${maxRequests}`);
+      return res.status(429).json({ error: 'Too many requests. Please slow down.' });
+    }
+
+    next();
+  };
+}
+
+/**
+ * Optimistic lock conflict helper
+ * Returns 409 Conflict if rowCount is 0 after a versioned update
+ */
+function checkOptimisticLock(result, res, entityName = 'Record') {
+  if (result.rowCount === 0) {
+    res.status(409).json({
+      error: 'Conflict',
+      message: `${entityName} was modified by another user. Please refresh and try again.`,
+      code: 'VERSION_CONFLICT',
+    });
+    return false;
+  }
+  return true;
+}
+
+module.exports = { lanCors, securityHeaders, rateLimiter, isAllowedOrigin, checkOptimisticLock };

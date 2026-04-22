@@ -1,0 +1,62 @@
+// Categories API routes
+const express = require('express');
+const db = require('../db');
+
+module.exports = function(broadcastTable) {
+  const router = express.Router();
+
+  router.get('/', async (req, res) => {
+    try {
+      const result = await db.query('SELECT * FROM categories WHERE is_active = true ORDER BY name');
+      res.json(result.rows);
+    } catch (error) {
+      console.error('[CATEGORIES ERROR]', error);
+      res.status(500).json({ error: 'Failed to fetch categories' });
+    }
+  });
+
+  router.post('/', async (req, res) => {
+    try {
+      const { name, description, color } = req.body;
+      const result = await db.query(
+        'INSERT INTO categories (name, description, color) VALUES ($1, $2, $3) RETURNING *',
+        [name, description, color]
+      );
+      await broadcastTable('categories');
+      res.status(201).json(result.rows[0]);
+    } catch (error) {
+      console.error('[CATEGORIES ERROR]', error);
+      res.status(500).json({ error: 'Failed to create category' });
+    }
+  });
+
+  router.put('/:id', async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { name, description, color, isActive } = req.body;
+      const result = await db.query(
+        'UPDATE categories SET name = $1, description = $2, color = $3, is_active = $4, updated_at = CURRENT_TIMESTAMP WHERE id = $5 RETURNING *',
+        [name, description, color, isActive, id]
+      );
+      await broadcastTable('categories');
+      res.json(result.rows[0]);
+    } catch (error) {
+      console.error('[CATEGORIES ERROR]', error);
+      res.status(500).json({ error: 'Failed to update category' });
+    }
+  });
+
+  router.delete('/:id', async (req, res) => {
+    try {
+      const { id } = req.params;
+      await db.query('UPDATE categories SET is_active = false WHERE id = $1', [id]);
+      await broadcastTable('categories');
+      res.json({ success: true });
+    } catch (error) {
+      console.error('[CATEGORIES ERROR]', error);
+      res.status(500).json({ error: 'Failed to delete category' });
+    }
+  });
+
+  return router;
+};

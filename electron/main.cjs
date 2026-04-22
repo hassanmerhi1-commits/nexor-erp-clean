@@ -1,0 +1,1438 @@
+/**
+ * Kwanza ERP - Main Process (PostgreSQL Edition)
+ * 
+ * Architecture:
+ * - IP file at C:\Kwanza ERP\IP determines mode
+ * - Server mode: PostgreSQL connection string → connects to PG, starts WebSocket server
+ * - Client mode: server hostname/IP → connects via WebSocket
+ * - Auto-updater via GitHub releases
+ * - Multi-company support via companies.json registry
+ * 
+ * IP file format:
+ *   Server: postgresql://postgres:yel3an7azi@127.0.0.1:5432/kwanza_erp
+ *   Client: SERVIDOR or 10.0.0.5  (hostname/IP = client mode)
+ */
+
+const { app, BrowserWindow, Menu, ipcMain } = require('electron');
+const path = require('path');
+const fs = require('fs');
+const os = require('os');
+const crypto = require('crypto');
+
+function requireRuntimeModule(moduleName) {
+  const candidates = [
+    () => require(moduleName),
+    () => process.resourcesPath ? require(path.join(process.resourcesPath, 'runtime-deps', 'node_modules', moduleName)) : null,
+    () => process.resourcesPath ? require(path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', moduleName)) : null,
+    () => process.resourcesPath ? require(path.join(process.resourcesPath, 'app', 'node_modules', moduleName)) : null,
+    () => require(path.join(__dirname, '..', 'node_modules', moduleName)),
+  ];
+
+  let lastError = null;
+  for (const load of candidates) {
+    try {
+      const mod = load();
+      if (mod) return mod;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  console.error(`[Startup] Failed to load runtime module "${moduleName}":`, lastError?.message || 'Unknown error');
+  return null;
+}
+
+const wsModule = requireRuntimeModule('ws');
+
+class MissingWebSocket {
+  static CONNECTING = 0;
+  static OPEN = 1;
+
+  constructor() {
+    throw new Error('Missing "ws" module in this desktop build. Rebuild and reinstall the app.');
+  }
+}
+
+class MissingWebSocketServer {
+  constructor() {
+    throw new Error('Missing "ws" module in this desktop build. Rebuild and reinstall the app.');
+  }
+}
+
+const WebSocket = wsModule?.WebSocket || wsModule || MissingWebSocket;
+const WebSocketServer = wsModule?.WebSocketServer || MissingWebSocketServer;
+
+const updaterModule = requireRuntimeModule('electron-updater');
+
+function createNoopAutoUpdater() {
+  const fail = () => Promise.reject(new Error('Missing "electron-updater" module in this desktop build.'));
+  return {
+    autoDownload: false,
+    autoInstallOnAppQuit: false,
+    logger: console,
+    checkForUpdates: fail,
+    downloadUpdate: fail,
+    quitAndInstall: () => {},
+    on: () => {},
+  };
+}
+
+const autoUpdater = updaterModule?.autoUpdater || createNoopAutoUpdater();
+
+// ============= AUTO-UPDATER CONFIGURATION =============
+autoUpdater.autoDownload = false;
+autoUpdater.autoInstallOnAppQuit = true;
+autoUpdater.logger = console;
+
+// ============= CONFIGURATION =============
+const INSTALL_DIR = 'C:\\Kwanza ERP';
+const IP_FILE_PATH = path.join(INSTALL_DIR, 'IP');
+const COMPANIES_FILE_PATH = path.join(INSTALL_DIR, 'companies.json');
+const WS_PORT = 4546;
+
+// Default PostgreSQL connection
+const DEFAULT_PG_URL = 'postgresql://postgres:yel3an7azi@127.0.0.1:5432/kwanza_erp';
+
+// Ensure install directory exists
+if (!fs.existsSync(INSTALL_DIR)) {
+  try {
+    fs.mkdirSync(INSTALL_DIR, { recursive: true });
+  } catch (err) {
+    console.error('Failed to create install directory:', err);
+  }
+}
+
+// Create IP file with default PG URL if it doesn't exist
+if (!fs.existsSync(IP_FILE_PATH)) {
+  try {
+    fs.writeFileSync(IP_FILE_PATH, DEFAULT_PG_URL, 'utf-8');
+    console.log('Created IP file with default PostgreSQL URL at:', IP_FILE_PATH);
+  } catch (err) {
+    console.error('Failed to create IP file:', err);
+  }
+}
+
+// ============= GLOBALS =============
+let mainWindow = null;
+let splashWindow = null;
+let purchaseInvoiceWindow = null;
+let purchaseProductPickerWindow = null;
+let resolveProductPickerSelection = null;
+/** @type {import('pg').Pool | null} */
+let pool = null;
+let pgConnectionString = null;
+let isServerMode = false;
+let serverAddress = null;
+let wss = null;
+let wsClient = null;
+let wsReconnectTimer = null;
+let wsConnectingPromise = null;
+const WS_RECONNECT_DELAY = 3000;
+const wsClientCompanies = new WeakMap();
+
+// ============= COMPANY REGISTRY =============
+function loadCompaniesRegistry() {
+  try {
+    if (fs.existsSync(COMPANIES_FILE_PATH)) {
+      return JSON.parse(fs.readFileSync(COMPANIES_FILE_PATH, 'utf-8'));
+    }
+  } catch (e) {
+    console.error('[Companies] Error loading registry:', e);
+  }
+  return [];
+}
+
+function saveCompaniesRegistry(companies) {
+  try {
+    fs.writeFileSync(COMPANIES_FILE_PATH, JSON.stringify(companies, null, 2), 'utf-8');
+    return true;
+  } catch (e) {
+    console.error('[Companies] Error saving registry:', e);
+    return false;
+  }
+}
+
+function ensureCompaniesRegistry() {
+  const companies = loadCompaniesRegistry();
+  if (!pgConnectionString) return companies;
+
+  let changed = false;
+  let defaultCompany = companies.find(c => c.id === 'company-default');
+
+  if (!defaultCompany) {
+    defaultCompany = { id: 'company-default', name: 'Empresa Principal', dbFile: pgConnectionString };
+    companies.unshift(defaultCompany);
+    changed = true;
+  }
+
+  if (changed) saveCompaniesRegistry(companies);
+  return companies;
+}
+
+// ============= IP FILE PARSING =============
+function parseIPFile() {
+  try {
+    if (!fs.existsSync(IP_FILE_PATH)) {
+      return { valid: false, error: 'IP file not found', path: null, isServer: false };
+    }
+    const content = fs.readFileSync(IP_FILE_PATH, 'utf-8').trim();
+    if (!content) {
+      return { valid: false, error: 'IP file is empty', path: null, isServer: false };
+    }
+    // Server mode - PostgreSQL connection string
+    if (content.startsWith('postgresql://') || content.startsWith('postgres://')) {
+      return { valid: true, path: content, isServer: true };
+    }
+    // Legacy server mode - local SQLite path (auto-migrate to PG)
+    if (/^[A-Za-z]:\\.+\.db$/.test(content)) {
+      console.log('[IP] Legacy SQLite path detected, migrating to PostgreSQL default');
+      try {
+        fs.writeFileSync(IP_FILE_PATH, DEFAULT_PG_URL, 'utf-8');
+      } catch (e) {}
+      return { valid: true, path: DEFAULT_PG_URL, isServer: true };
+    }
+    // Client mode - hostname or IP
+    const serverMatch = content.match(/^([A-Za-z0-9_\-\.]+)$/);
+    if (serverMatch) {
+      return { valid: true, path: null, isServer: false, serverAddress: serverMatch[1] };
+    }
+    return { valid: false, error: 'Invalid IP file format', path: null, isServer: false };
+  } catch (error) {
+    return { valid: false, error: error.message, path: null, isServer: false };
+  }
+}
+
+// ============= POSTGRESQL OPERATIONS =============
+const ERP_TABLES = [
+  'users', 'user_permissions', 'user_sessions', 'branches', 'categories', 'products',
+  'clients', 'suppliers',
+  'chart_of_accounts', 'journal_entries', 'journal_entry_lines',
+  'sales', 'sale_items', 'proformas', 'proforma_items',
+  'purchase_orders', 'purchase_order_items',
+  'purchase_invoices', 'erp_documents',
+  'credit_notes', 'credit_note_items', 'debit_notes', 'debit_note_items',
+  'receipts', 'payments',
+  'stock_movements', 'stock_transfers', 'stock_transfer_items',
+  'invoices', 'daily_reports', 'caixas', 'caixa_sessions', 'caixa_transactions',
+  'bank_accounts', 'bank_transactions', 'expenses',
+  'money_transfers', 'open_items', 'document_links',
+  'settings', 'audit_logs'
+];
+
+async function connectPostgres(connectionString) {
+  const pgModule = requireRuntimeModule('pg');
+  if (!pgModule) {
+    throw new Error('Missing "pg" module. Run: npm install pg');
+  }
+  const { Pool } = pgModule;
+  pool = new Pool({ connectionString });
+
+  // Test connection
+  const client = await pool.connect();
+  const res = await client.query('SELECT NOW()');
+  client.release();
+  console.log('[DB] Connected to PostgreSQL at', res.rows[0].now);
+  return pool;
+}
+
+async function dbGetAll(table) {
+  if (!pool) return [];
+  try {
+    const result = await pool.query(`SELECT * FROM ${table}`);
+    return result.rows || [];
+  } catch (e) {
+    // Table might not exist
+    return [];
+  }
+}
+
+async function dbGetById(table, id) {
+  if (!pool) return null;
+  try {
+    const result = await pool.query(`SELECT * FROM ${table} WHERE id = $1`, [id]);
+    return result.rows[0] || null;
+  } catch (e) {
+    return null;
+  }
+}
+
+async function dbInsert(table, data, companyId = null) {
+  if (!pool) return { success: false, error: 'Database not connected' };
+  try {
+    const keys = Object.keys(data);
+    const values = Object.values(data);
+    const placeholders = keys.map((_, i) => `$${i + 1}`).join(', ');
+    const onConflict = keys.filter(k => k !== 'id').map(k => `${k} = EXCLUDED.${k}`).join(', ');
+    
+    await pool.query(
+      `INSERT INTO ${table} (${keys.join(', ')}) VALUES (${placeholders})
+       ON CONFLICT (id) DO UPDATE SET ${onConflict}`,
+      values
+    );
+
+    // Audit trail
+    if (table !== 'audit_logs' && table !== 'user_sessions') {
+      try {
+        const auditId = 'audit-' + Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
+        await pool.query(
+          `INSERT INTO audit_logs (id, action, entity_type, entity_id, new_value, timestamp) VALUES ($1, $2, $3, $4, $5, NOW())`,
+          [auditId, 'INSERT', table, data.id || '', JSON.stringify(data)]
+        );
+      } catch (e) { /* audit table might not exist yet */ }
+    }
+    broadcastUpdate(table, 'insert', data.id, companyId);
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+}
+
+async function dbUpdate(table, id, data, companyId = null) {
+  if (!pool) return { success: false, error: 'Database not connected' };
+  try {
+    // Capture previous value for audit
+    let previousValue = null;
+    if (table !== 'audit_logs' && table !== 'user_sessions') {
+      try {
+        const prev = await pool.query(`SELECT * FROM ${table} WHERE id = $1`, [id]);
+        previousValue = prev.rows[0] || null;
+      } catch (e) {}
+    }
+
+    const keys = Object.keys(data);
+    const values = Object.values(data);
+    const updates = keys.map((key, i) => `${key} = $${i + 1}`).join(', ');
+    values.push(id);
+    
+    await pool.query(
+      `UPDATE ${table} SET ${updates}, updated_at = NOW() WHERE id = $${values.length}`,
+      values
+    );
+
+    // Audit trail
+    if (table !== 'audit_logs' && table !== 'user_sessions') {
+      try {
+        const auditId = 'audit-' + Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
+        await pool.query(
+          `INSERT INTO audit_logs (id, action, entity_type, entity_id, previous_value, new_value, timestamp) VALUES ($1, $2, $3, $4, $5, $6, NOW())`,
+          [auditId, 'UPDATE', table, id, previousValue ? JSON.stringify(previousValue) : null, JSON.stringify(data)]
+        );
+      } catch (e) {}
+    }
+    broadcastUpdate(table, 'update', id, companyId);
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+}
+
+async function dbDelete(table, id, companyId = null) {
+  if (!pool) return { success: false, error: 'Database not connected' };
+  try {
+    let previousValue = null;
+    if (table !== 'audit_logs' && table !== 'user_sessions') {
+      try {
+        const prev = await pool.query(`SELECT * FROM ${table} WHERE id = $1`, [id]);
+        previousValue = prev.rows[0] || null;
+      } catch (e) {}
+    }
+
+    await pool.query(`DELETE FROM ${table} WHERE id = $1`, [id]);
+
+    if (table !== 'audit_logs' && table !== 'user_sessions') {
+      try {
+        const auditId = 'audit-' + Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
+        await pool.query(
+          `INSERT INTO audit_logs (id, action, entity_type, entity_id, previous_value, timestamp) VALUES ($1, $2, $3, $4, $5, NOW())`,
+          [auditId, 'DELETE', table, id, previousValue ? JSON.stringify(previousValue) : null]
+        );
+      } catch (e) {}
+    }
+    broadcastUpdate(table, 'delete', id, companyId);
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+}
+
+async function dbQuery(sql, params = []) {
+  if (!pool) return { success: false, error: 'Database not connected' };
+  try {
+    // Convert ? placeholders to $1, $2, etc. for pg compatibility
+    let pgSql = sql;
+    let paramIndex = 0;
+    pgSql = pgSql.replace(/\?/g, () => `$${++paramIndex}`);
+    
+    const result = await pool.query(pgSql, params);
+    return result.rows || [];
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+}
+
+async function dbExportAll() {
+  if (!pool) return null;
+  const data = { exportedAt: new Date().toISOString() };
+  for (const table of ERP_TABLES) {
+    try { data[table] = await dbGetAll(table); } catch (e) { data[table] = []; }
+  }
+  return data;
+}
+
+async function dbImportAll(data, companyId = null) {
+  if (!pool) return { success: false, error: 'Database not connected' };
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    for (const table of ERP_TABLES) {
+      if (data[table] && Array.isArray(data[table])) {
+        await client.query(`DELETE FROM ${table}`);
+        for (const row of data[table]) {
+          const keys = Object.keys(row);
+          const values = Object.values(row);
+          const placeholders = keys.map((_, i) => `$${i + 1}`).join(', ');
+          await client.query(`INSERT INTO ${table} (${keys.join(', ')}) VALUES (${placeholders})`, values);
+        }
+      }
+    }
+    await client.query('COMMIT');
+    broadcastUpdate('all', 'import', null, companyId);
+    return { success: true };
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    return { success: false, error: error.message };
+  } finally {
+    client.release();
+  }
+}
+
+// ============= DATABASE REQUEST HANDLER =============
+async function handleDBRequest(request) {
+  const { action, table, id, data, sql, params, companyId } = request;
+
+  try {
+    switch (action) {
+      case 'ping': return { success: true, message: 'pong', isServer: true };
+      case 'getAll': return { success: true, data: await dbGetAll(table) };
+      case 'getById': return { success: true, data: await dbGetById(table, id) };
+      case 'insert': return await dbInsert(table, data, companyId);
+      case 'update': return await dbUpdate(table, id, data, companyId);
+      case 'delete': return await dbDelete(table, id, companyId);
+      case 'query':
+        const result = await dbQuery(sql, params || []);
+        return Array.isArray(result) ? { success: true, data: result } : result;
+      case 'export': return { success: true, data: await dbExportAll() };
+      case 'import': return await dbImportAll(data, companyId);
+      default: return { success: false, error: `Unknown action: ${action}` };
+    }
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+}
+
+// ============= WEBSOCKET SERVER (SERVER MODE) =============
+function startWebSocketServer() {
+  if (wss) return { success: true, port: WS_PORT };
+
+  try {
+    wss = new WebSocketServer({ port: WS_PORT, host: '0.0.0.0' });
+    console.log(`✅ WebSocket server running on port ${WS_PORT}`);
+
+    wss.on('connection', (ws, req) => {
+      const clientIP = req.socket.remoteAddress;
+      console.log(`[WS] Client connected from ${clientIP}`);
+
+      ws.on('message', async (raw) => {
+        try {
+          const msg = JSON.parse(raw.toString());
+          console.log(`[WS] ← ${msg.action}(${msg.table || ''}) from ${clientIP}`);
+
+          if (msg.action === 'listCompanies') {
+            const companies = ensureCompaniesRegistry();
+            ws.send(JSON.stringify({ success: true, data: companies, requestId: msg.requestId }));
+            return;
+          }
+          if (msg.action === 'setCompany') {
+            wsClientCompanies.set(ws, msg.companyId);
+            // Send all table data to new client
+            for (const table of ERP_TABLES) {
+              try {
+                const rows = await dbGetAll(table);
+                ws.send(JSON.stringify({ type: 'db-sync', table, rows, companyId: msg.companyId }));
+              } catch (e) { /* table might not exist yet */ }
+            }
+            ws.send(JSON.stringify({ success: true, requestId: msg.requestId }));
+            return;
+          }
+
+          const response = await handleDBRequest(msg);
+          ws.send(JSON.stringify({ ...response, requestId: msg.requestId }));
+        } catch (err) {
+          ws.send(JSON.stringify({ success: false, error: err.message }));
+        }
+      });
+
+      ws.on('close', () => console.log(`[WS] Client disconnected: ${clientIP}`));
+      ws.on('error', (err) => console.log(`[WS] Client error: ${err.message}`));
+    });
+
+    wss.on('error', (err) => { console.error('[WS] Server error:', err); wss = null; });
+    return { success: true, port: WS_PORT };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+}
+
+async function broadcastTableData(table, companyId = null) {
+  let rows = [];
+  try { rows = await dbGetAll(table); } catch (e) { return; }
+  const message = JSON.stringify({ type: 'db-sync', table, rows, companyId });
+
+  if (wss) {
+    wss.clients.forEach(client => {
+      if (client.readyState === WebSocket.OPEN) {
+        const clientCompany = wsClientCompanies.get(client);
+        if (!companyId || !clientCompany || clientCompany === companyId) {
+          client.send(message);
+        }
+      }
+    });
+  }
+  mainWindow?.webContents.send('erp:sync', { table, rows, companyId });
+}
+
+function broadcastUpdate(table, action, id, companyId = null) {
+  if (table === 'all') {
+    ERP_TABLES.forEach(t => broadcastTableData(t, companyId));
+    return;
+  }
+  broadcastTableData(table, companyId);
+}
+
+// ============= WEBSOCKET CLIENT (CLIENT MODE) =============
+function connectToServer() {
+  if (wsClient && (wsClient.readyState === WebSocket.OPEN || wsClient.readyState === WebSocket.CONNECTING)) return;
+
+  const url = `ws://${serverAddress}:${WS_PORT}`;
+  console.log(`[WS] Connecting to server: ${url}`);
+
+  try {
+    wsClient = new WebSocket(url);
+
+    wsClient.on('open', () => {
+      console.log(`✅ Connected to ERP server: ${serverAddress}`);
+      if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
+      try { mainWindow?.webContents.send('erp:updated', { table: 'all', action: 'connected' }); } catch (e) {}
+    });
+
+    wsClient.on('message', (raw) => {
+      try {
+        const msg = JSON.parse(raw.toString());
+        if (msg.type === 'db-sync') {
+          mainWindow?.webContents.send('erp:sync', { table: msg.table, rows: msg.rows, companyId: msg.companyId });
+          return;
+        }
+        if (msg.type === 'db-updated') {
+          mainWindow?.webContents.send('erp:updated', msg);
+        }
+      } catch (err) {}
+    });
+
+    wsClient.on('close', () => { wsClient = null; scheduleReconnect(); });
+    wsClient.on('error', (err) => console.error('[WS] Connection error:', err.message));
+  } catch (error) {
+    scheduleReconnect();
+  }
+}
+
+function scheduleReconnect() {
+  if (wsReconnectTimer) return;
+  wsReconnectTimer = setTimeout(() => {
+    wsReconnectTimer = null;
+    if (!isServerMode && serverAddress) connectToServer();
+  }, WS_RECONNECT_DELAY);
+}
+
+function ensureClientConnected(timeoutMs = 10000) {
+  if (wsClient && wsClient.readyState === WebSocket.OPEN) return Promise.resolve();
+  if (!serverAddress) return Promise.reject(new Error('Server address not configured'));
+  if (wsConnectingPromise) return wsConnectingPromise;
+
+  if (!wsClient || wsClient.readyState !== WebSocket.CONNECTING) connectToServer();
+  const socket = wsClient;
+
+  wsConnectingPromise = new Promise((resolve, reject) => {
+    if (!socket) { wsConnectingPromise = null; reject(new Error('WebSocket not initialized')); return; }
+    const timer = setTimeout(() => { cleanup(); reject(new Error('Connection timeout')); }, timeoutMs);
+
+    const onOpen = () => { cleanup(); resolve(); };
+    const onClose = () => { cleanup(); reject(new Error('Connection closed')); };
+    const onError = (err) => { cleanup(); reject(new Error(err?.message || 'Connection error')); };
+
+    const cleanup = () => {
+      clearTimeout(timer);
+      try { socket.off('open', onOpen); socket.off('close', onClose); socket.off('error', onError); } catch (e) {}
+      wsConnectingPromise = null;
+    };
+
+    if (socket.readyState === WebSocket.OPEN) { cleanup(); resolve(); return; }
+    socket.on('open', onOpen);
+    socket.on('close', onClose);
+    socket.on('error', onError);
+  });
+
+  return wsConnectingPromise;
+}
+
+async function sendToServer(request) {
+  await ensureClientConnected();
+  return new Promise((resolve, reject) => {
+    if (!wsClient || wsClient.readyState !== WebSocket.OPEN) { reject(new Error('Not connected')); return; }
+    const requestId = Date.now().toString() + Math.random().toString(36).substr(2, 9);
+    const timeout = setTimeout(() => reject(new Error('Request timeout')), 30000);
+    const handler = (raw) => {
+      try {
+        const msg = JSON.parse(raw.toString());
+        if (msg.requestId === requestId) { clearTimeout(timeout); wsClient.off('message', handler); resolve(msg); }
+      } catch (err) {}
+    };
+    wsClient.on('message', handler);
+    wsClient.send(JSON.stringify({ ...request, requestId }));
+  });
+}
+
+// ============= SETUP WIZARD SUPPORT =============
+ipcMain.handle('setup:getConfig', async () => {
+  try {
+    const configPath = path.join(INSTALL_DIR, 'setup-config.json');
+    if (fs.existsSync(configPath)) {
+      const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+      return { success: true, config };
+    }
+    // Check if IP file exists and is configured
+    const ipConfig = parseIPFile();
+    if (ipConfig.valid) {
+      return {
+        success: true,
+        config: {
+          setupComplete: true,
+          role: ipConfig.isServer ? 'server' : 'client',
+          serverConfig: ipConfig.isServer ? { serverIp: getLocalIP(), serverPort: WS_PORT } : null,
+          clientConfig: !ipConfig.isServer ? { serverIp: ipConfig.serverAddress, serverPort: WS_PORT } : null,
+        }
+      };
+    }
+    return { success: true, config: { setupComplete: false, role: null } };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('setup:saveConfig', async (_, config) => {
+  try {
+    const configPath = path.join(INSTALL_DIR, 'setup-config.json');
+    fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
+    return { success: true };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('setup:reset', async () => {
+  try {
+    const configPath = path.join(INSTALL_DIR, 'setup-config.json');
+    if (fs.existsSync(configPath)) fs.unlinkSync(configPath);
+    fs.writeFileSync(IP_FILE_PATH, '', 'utf-8');
+    return { success: true };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+function getLocalIP() {
+  const interfaces = os.networkInterfaces();
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name]) {
+      if (iface.family === 'IPv4' && !iface.internal) return iface.address;
+    }
+  }
+  return '127.0.0.1';
+}
+
+// ============= DATABASE INITIALIZATION =============
+async function initDatabase() {
+  const ipConfig = parseIPFile();
+  if (!ipConfig.valid) {
+    console.log('IP file not configured:', ipConfig.error);
+    return { success: false, error: ipConfig.error, needsConfig: true };
+  }
+
+  if (!ipConfig.isServer) {
+    isServerMode = false;
+    serverAddress = ipConfig.serverAddress;
+    pgConnectionString = null;
+    console.log('CLIENT MODE: Will connect to', serverAddress);
+    connectToServer();
+    return { success: true, mode: 'client', serverAddress };
+  }
+
+  // Server mode - connect to PostgreSQL
+  pgConnectionString = ipConfig.path;
+  isServerMode = true;
+  serverAddress = null;
+
+  try {
+    if (pool) { await pool.end().catch(() => {}); pool = null; }
+    await connectPostgres(pgConnectionString);
+    ensureCompaniesRegistry();
+    startWebSocketServer();
+    console.log('SERVER MODE: Connected to PostgreSQL');
+    return { success: true, mode: 'server', path: pgConnectionString, wsPort: WS_PORT };
+  } catch (error) {
+    console.error('Error initializing database:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+// ============= HOT UPDATE SYSTEM =============
+function getHotUpdateConfigPath() {
+  return path.join(INSTALL_DIR, 'hot-update-config.json');
+}
+
+function loadHotUpdateConfig() {
+  try {
+    const cfgPath = getHotUpdateConfigPath();
+    if (fs.existsSync(cfgPath)) {
+      return JSON.parse(fs.readFileSync(cfgPath, 'utf-8'));
+    }
+  } catch (e) {}
+  return { enabled: false, serverUrl: '', autoConnect: false };
+}
+
+function saveHotUpdateConfig(config) {
+  try {
+    fs.writeFileSync(getHotUpdateConfigPath(), JSON.stringify(config, null, 2), 'utf-8');
+    return { success: true, config };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+}
+
+// ============= WINDOW CREATION =============
+function createSplashWindow() {
+  splashWindow = new BrowserWindow({
+    width: 500, height: 350, frame: false, transparent: true,
+    alwaysOnTop: true, resizable: false, skipTaskbar: true,
+    icon: path.join(__dirname, '../public/icon.png'),
+    webPreferences: { nodeIntegration: false, contextIsolation: true }
+  });
+  splashWindow.loadFile(path.join(__dirname, 'splash.html'));
+  splashWindow.center();
+}
+
+function normalizeServerUrl(url) {
+  if (!url) return '';
+  const trimmed = String(url).trim().replace(/\/$/, '');
+  if (!trimmed) return '';
+  return /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
+}
+
+function getLocalRendererSource() {
+  const possiblePaths = [
+    path.join(__dirname, '../dist/index.html'),
+    path.join(process.resourcesPath, 'app/dist/index.html'),
+    path.join(app.getAppPath(), 'dist/index.html'),
+  ];
+
+  for (const possiblePath of possiblePaths) {
+    try {
+      if (fs.existsSync(possiblePath)) {
+        return { type: 'local', path: possiblePath };
+      }
+    } catch (error) {}
+  }
+
+  return { type: 'local', path: possiblePaths[0] };
+}
+
+function getRendererSource() {
+  const isDev = process.env.NODE_ENV === 'development' || process.env.ELECTRON_DEV === 'true';
+  if (isDev) {
+    return { type: 'dev', url: 'http://localhost:5173' };
+  }
+
+  const hotUpdate = loadHotUpdateConfig();
+  const serverUrl = normalizeServerUrl(hotUpdate.serverUrl);
+  if (hotUpdate.enabled && serverUrl) {
+    return { type: 'server', url: `${serverUrl}/app`, baseUrl: serverUrl };
+  }
+
+  return getLocalRendererSource();
+}
+
+function showRendererRecoveryScreen(targetWindow, message) {
+  const html = `<!doctype html>
+  <html>
+    <head>
+      <meta charset="utf-8" />
+      <title>Kwanza ERP</title>
+      <style>
+        body { font-family: Segoe UI, Arial, sans-serif; margin: 0; min-height: 100vh; display: grid; place-items: center; background: #f6f7fb; color: #121826; }
+        .card { width: min(560px, calc(100vw - 32px)); background: white; border: 1px solid #d9deea; border-radius: 16px; padding: 24px; box-shadow: 0 16px 40px rgba(16,24,40,.08); }
+        h1 { margin: 0 0 8px; font-size: 24px; }
+        p { margin: 0 0 12px; line-height: 1.5; color: #475467; }
+        code { display: block; padding: 12px; border-radius: 10px; background: #f2f4f7; color: #101828; overflow-wrap: anywhere; }
+      </style>
+    </head>
+    <body>
+      <div class="card">
+        <h1>Kwanza ERP could not load</h1>
+        <p>The desktop app could not open the live update server or packaged app files.</p>
+        <p>${String(message || 'Unknown startup error')}</p>
+        <code>Tip: disable Hot Updates or start the local backend server on the configured URL.</code>
+      </div>
+    </body>
+  </html>`;
+  targetWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+}
+
+function loadRendererRoute(targetWindow, route = '/') {
+  const normalizedRoute = route.startsWith('/') ? route : `/${route}`;
+  const source = getRendererSource();
+
+  if (source.type === 'dev') {
+    targetWindow.loadURL(`${source.url}/#${normalizedRoute}`);
+    return;
+  }
+
+  if (source.type === 'server') {
+    const routePath = normalizedRoute === '/' ? '' : normalizedRoute;
+    const fallbackSource = getLocalRendererSource();
+    let recovered = false;
+
+    const cleanup = () => {
+      targetWindow.webContents.removeListener('did-fail-load', handleFail);
+      targetWindow.webContents.removeListener('render-process-gone', handleGone);
+    };
+
+    const fallbackToLocal = (reason) => {
+      if (recovered) return;
+      recovered = true;
+      cleanup();
+      console.warn('[HotUpdate] Server renderer failed, falling back to local bundle:', reason);
+      try {
+        targetWindow.loadFile(fallbackSource.path, { hash: normalizedRoute });
+      } catch (error) {
+        console.error('[HotUpdate] Local fallback failed:', error);
+        showRendererRecoveryScreen(targetWindow, error?.message || reason);
+      }
+    };
+
+    const handleFail = (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+      if (!isMainFrame) return;
+      fallbackToLocal(`${errorDescription || 'Load failed'} (${validatedURL || source.url}${routePath})`);
+    };
+
+    const handleGone = (_event, details) => {
+      fallbackToLocal(details?.reason || 'Renderer process crashed');
+    };
+
+    cleanup();
+    targetWindow.webContents.once('did-fail-load', handleFail);
+    targetWindow.webContents.once('render-process-gone', handleGone);
+    targetWindow.loadURL(`${source.url}${routePath}`).catch((error) => fallbackToLocal(error?.message || 'loadURL failed'));
+    return;
+  }
+
+  targetWindow.loadFile(source.path, { hash: normalizedRoute }).catch((error) => {
+    console.error('[Renderer] Failed to load local renderer:', error);
+    showRendererRecoveryScreen(targetWindow, error?.message || 'Local renderer load failed');
+  });
+}
+
+function resolvePendingProductPicker(payload) {
+  if (!resolveProductPickerSelection) return;
+  resolveProductPickerSelection(payload);
+  resolveProductPickerSelection = null;
+}
+
+function openPurchaseInvoiceWindow() {
+  if (purchaseInvoiceWindow && !purchaseInvoiceWindow.isDestroyed()) {
+    purchaseInvoiceWindow.show();
+    purchaseInvoiceWindow.focus();
+    return { success: true };
+  }
+
+  purchaseInvoiceWindow = new BrowserWindow({
+    width: 1500,
+    height: 920,
+    minWidth: 1180,
+    minHeight: 760,
+    parent: mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined,
+    modal: false,
+    skipTaskbar: true,
+    icon: path.join(__dirname, '../public/icon.png'),
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, 'preload.cjs')
+    },
+    autoHideMenuBar: false,
+    show: false,
+  });
+
+  loadRendererRoute(purchaseInvoiceWindow, '/purchase-invoices-window?mode=create&standalone=1');
+
+  purchaseInvoiceWindow.once('ready-to-show', () => {
+    purchaseInvoiceWindow.show();
+    purchaseInvoiceWindow.focus();
+  });
+
+  purchaseInvoiceWindow.on('closed', () => {
+    purchaseInvoiceWindow = null;
+  });
+
+  return { success: true };
+}
+
+function openPurchaseProductPickerWindow(parentWindow) {
+  if (purchaseProductPickerWindow && !purchaseProductPickerWindow.isDestroyed()) {
+    purchaseProductPickerWindow.show();
+    purchaseProductPickerWindow.focus();
+    return Promise.resolve({ success: false, error: 'Janela de seleção já está aberta' });
+  }
+
+  return new Promise((resolve) => {
+    resolveProductPickerSelection = resolve;
+
+    purchaseProductPickerWindow = new BrowserWindow({
+      width: 1180,
+      height: 760,
+      minWidth: 980,
+      minHeight: 620,
+      parent: parentWindow && !parentWindow.isDestroyed() ? parentWindow : (mainWindow || undefined),
+      modal: true,
+      icon: path.join(__dirname, '../public/icon.png'),
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+        preload: path.join(__dirname, 'preload.cjs')
+      },
+      autoHideMenuBar: false,
+      show: false,
+    });
+
+    loadRendererRoute(purchaseProductPickerWindow, '/purchase-invoices-window?mode=product-picker&standalone=1');
+
+    purchaseProductPickerWindow.once('ready-to-show', () => {
+      purchaseProductPickerWindow.show();
+      purchaseProductPickerWindow.focus();
+    });
+
+    purchaseProductPickerWindow.on('closed', () => {
+      purchaseProductPickerWindow = null;
+      resolvePendingProductPicker({ success: false, cancelled: true });
+    });
+  });
+}
+
+function createWindow() {
+  mainWindow = new BrowserWindow({
+    width: 1400, height: 900, minWidth: 1024, minHeight: 768,
+    icon: path.join(__dirname, '../public/icon.png'),
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, 'preload.cjs')
+    },
+    autoHideMenuBar: false,
+    show: false
+  });
+
+  const menuTemplate = [
+    { label: 'Kwanza ERP', submenu: [
+      { label: 'About', role: 'about' },
+      { type: 'separator' },
+      { label: 'Quit', accelerator: 'CmdOrCtrl+Q', click: () => app.quit() }
+    ]},
+    { label: 'Edit', submenu: [
+      { role: 'undo' }, { role: 'redo' }, { type: 'separator' },
+      { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }
+    ]},
+    { label: 'View', submenu: [
+      { role: 'reload' }, { role: 'forceReload' }, { role: 'toggleDevTools' },
+      { type: 'separator' }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' },
+      { type: 'separator' }, { role: 'togglefullscreen' }
+    ]},
+    { label: 'Window', submenu: [{ role: 'minimize' }, { role: 'close' }] }
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate));
+
+  const isDev = process.env.NODE_ENV === 'development' || process.env.ELECTRON_DEV === 'true';
+  loadRendererRoute(mainWindow, '/');
+  if (isDev) {
+    mainWindow.webContents.openDevTools();
+  }
+
+  mainWindow.once('ready-to-show', () => {
+    setTimeout(() => {
+      if (splashWindow) { splashWindow.close(); splashWindow = null; }
+      mainWindow.show();
+      mainWindow.focus();
+    }, 1500);
+  });
+
+  mainWindow.on('closed', () => { mainWindow = null; });
+}
+
+// ============= APP LIFECYCLE =============
+app.whenReady().then(async () => {
+  createSplashWindow();
+  createWindow();
+
+  // Initialize database based on IP file
+  const dbResult = await initDatabase();
+  console.log('[Init] Database result:', dbResult);
+
+  // Check for updates (production only)
+  const isDev = process.env.NODE_ENV === 'development' || process.env.ELECTRON_DEV === 'true';
+  if (!isDev) {
+    setTimeout(() => {
+      autoUpdater.checkForUpdates().catch(err => console.log('[AutoUpdater] Check failed:', err.message));
+    }, 3000);
+  }
+});
+
+app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
+app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
+app.on('web-contents-created', (event, contents) => {
+  contents.setWindowOpenHandler(() => ({ action: 'deny' }));
+});
+
+// Cleanup on quit
+app.on('before-quit', async () => {
+  if (wss) { wss.close(); wss = null; }
+  if (wsClient) { wsClient.close(); wsClient = null; }
+  if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); }
+  if (purchaseProductPickerWindow && !purchaseProductPickerWindow.isDestroyed()) {
+    purchaseProductPickerWindow.destroy();
+    purchaseProductPickerWindow = null;
+  }
+  if (purchaseInvoiceWindow && !purchaseInvoiceWindow.isDestroyed()) {
+    purchaseInvoiceWindow.destroy();
+    purchaseInvoiceWindow = null;
+  }
+  resolvePendingProductPicker({ success: false, cancelled: true });
+  if (pool) { try { await pool.end(); } catch (e) {} }
+});
+
+// ============= IPC HANDLERS =============
+
+// IP file operations
+ipcMain.handle('ipfile:read', () => {
+  try {
+    return fs.existsSync(IP_FILE_PATH) ? fs.readFileSync(IP_FILE_PATH, 'utf-8') : '';
+  } catch (e) { return ''; }
+});
+
+ipcMain.handle('ipfile:write', (_, content) => {
+  try {
+    fs.writeFileSync(IP_FILE_PATH, content, 'utf-8');
+    return { success: true };
+  } catch (e) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('ipfile:parse', () => parseIPFile());
+
+// Company management
+ipcMain.handle('company:list', () => {
+  if (isServerMode) return ensureCompaniesRegistry();
+  return sendToServer({ action: 'listCompanies' }).then(r => r.data || []).catch(() => []);
+});
+
+ipcMain.handle('company:create', (_, name) => {
+  // Multi-company with PostgreSQL would need separate schemas - not supported yet
+  return { success: false, error: 'Multi-company requires separate PostgreSQL databases. Contact support.' };
+});
+
+ipcMain.handle('company:setActive', async (_, companyId) => {
+  if (isServerMode) {
+    // Send all table data for this company to renderer
+    for (const table of ERP_TABLES) {
+      try {
+        const rows = await dbGetAll(table);
+        mainWindow?.webContents.send('erp:sync', { table, rows, companyId });
+      } catch (e) {}
+    }
+    return { success: true };
+  }
+  return sendToServer({ action: 'setCompany', companyId });
+});
+
+// Database operations (transparently routed)
+ipcMain.handle('db:getStatus', () => ({
+  success: true,
+  mode: isServerMode ? 'server' : (serverAddress ? 'client' : 'unconfigured'),
+  path: pgConnectionString,
+  serverAddress,
+  wsPort: WS_PORT,
+  connected: isServerMode ? !!pool : (wsClient?.readyState === WebSocket.OPEN),
+}));
+
+ipcMain.handle('db:init', () => initDatabase());
+
+ipcMain.handle('db:getAll', async (_, table, companyId) => {
+  if (isServerMode) {
+    return { success: true, data: await dbGetAll(table) };
+  }
+  return sendToServer({ action: 'getAll', table, companyId });
+});
+
+ipcMain.handle('db:getById', async (_, table, id, companyId) => {
+  if (isServerMode) {
+    return { success: true, data: await dbGetById(table, id) };
+  }
+  return sendToServer({ action: 'getById', table, id, companyId });
+});
+
+ipcMain.handle('db:insert', async (_, table, data, companyId) => {
+  if (isServerMode) {
+    return await dbInsert(table, data, companyId);
+  }
+  return sendToServer({ action: 'insert', table, data, companyId });
+});
+
+ipcMain.handle('db:update', async (_, table, id, data, companyId) => {
+  if (isServerMode) {
+    return await dbUpdate(table, id, data, companyId);
+  }
+  return sendToServer({ action: 'update', table, id, data, companyId });
+});
+
+ipcMain.handle('db:delete', async (_, table, id, companyId) => {
+  if (isServerMode) {
+    return await dbDelete(table, id, companyId);
+  }
+  return sendToServer({ action: 'delete', table, id, companyId });
+});
+
+ipcMain.handle('db:query', async (_, sql, params, companyId) => {
+  if (isServerMode) {
+    const result = await dbQuery(sql, params || []);
+    return Array.isArray(result) ? { success: true, data: result } : result;
+  }
+  return sendToServer({ action: 'query', sql, params, companyId });
+});
+
+ipcMain.handle('db:export', async (_, companyId) => {
+  if (isServerMode) {
+    return { success: true, data: await dbExportAll() };
+  }
+  return sendToServer({ action: 'export', companyId });
+});
+
+ipcMain.handle('db:import', async (_, data, companyId) => {
+  if (isServerMode) {
+    return await dbImportAll(data, companyId);
+  }
+  return sendToServer({ action: 'import', data, companyId });
+});
+
+ipcMain.handle('db:create', async () => {
+  // PostgreSQL databases are created via Docker/init.sql, not at runtime
+  return { success: true, message: 'PostgreSQL database managed by Docker' };
+});
+
+ipcMain.handle('db:testConnection', async () => {
+  if (isServerMode) {
+    try {
+      if (!pool) return { success: false, mode: 'server', error: 'No pool' };
+      await pool.query('SELECT 1');
+      return { success: true, mode: 'server' };
+    } catch (e) {
+      return { success: false, mode: 'server', error: e.message };
+    }
+  }
+  try {
+    const result = await sendToServer({ action: 'ping' });
+    return { success: result.success, mode: 'client' };
+  } catch (e) { return { success: false, mode: 'client', error: e.message }; }
+});
+
+// Network info
+ipcMain.handle('network:getLocalIPs', () => {
+  const ips = [];
+  const interfaces = os.networkInterfaces();
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name]) {
+      if (iface.family === 'IPv4' && !iface.internal) ips.push(iface.address);
+    }
+  }
+  return ips;
+});
+
+ipcMain.handle('network:getInstallPath', () => INSTALL_DIR);
+ipcMain.handle('network:getIPFilePath', () => IP_FILE_PATH);
+ipcMain.handle('network:getComputerName', () => os.hostname());
+
+// Purchase windows
+ipcMain.handle('purchase:openCreateWindow', () => {
+  return openPurchaseInvoiceWindow();
+});
+
+ipcMain.handle('purchase:openProductPicker', (event) => {
+  const parentWindow = BrowserWindow.fromWebContents(event.sender) || mainWindow;
+  return openPurchaseProductPickerWindow(parentWindow);
+});
+
+ipcMain.handle('purchase:selectProduct', (_, product) => {
+  if (!product || !product.id) {
+    return { success: false, error: 'Produto inválido' };
+  }
+
+  resolvePendingProductPicker({ success: true, product });
+
+  if (purchaseProductPickerWindow && !purchaseProductPickerWindow.isDestroyed()) {
+    purchaseProductPickerWindow.close();
+  }
+
+  return { success: true };
+});
+
+ipcMain.handle('window:closeCurrent', (event) => {
+  const senderWindow = BrowserWindow.fromWebContents(event.sender);
+  if (senderWindow && !senderWindow.isDestroyed()) {
+    senderWindow.close();
+  }
+  return { success: true };
+});
+
+// Print support
+ipcMain.handle('print:html', async (_, html, options = {}) => {
+  try {
+    const printWin = new BrowserWindow({ show: false, webPreferences: { nodeIntegration: false } });
+    await printWin.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+    await new Promise(resolve => setTimeout(resolve, 500));
+    await printWin.webContents.print({ silent: options.silent || false, printBackground: true });
+    printWin.close();
+    return { success: true };
+  } catch (e) { return { success: false, error: e.message }; }
+});
+
+// App controls
+ipcMain.handle('app:relaunch', () => { app.relaunch(); app.exit(0); });
+ipcMain.handle('app:version', () => app.getVersion());
+
+// Auto-updater
+ipcMain.handle('updater:check', async () => {
+  try { await autoUpdater.checkForUpdates(); return { success: true }; }
+  catch (e) { return { success: false, error: e.message }; }
+});
+ipcMain.handle('updater:download', async () => {
+  try { await autoUpdater.downloadUpdate(); return { success: true }; }
+  catch (e) { return { success: false, error: e.message }; }
+});
+ipcMain.handle('updater:install', () => { autoUpdater.quitAndInstall(); return { success: true }; });
+ipcMain.handle('updater:getVersion', () => app.getVersion());
+
+// Auto-updater events → renderer
+autoUpdater.on('checking-for-update', () => {
+  mainWindow?.webContents.send('updater:status', { status: 'checking' });
+});
+autoUpdater.on('update-available', (info) => {
+  mainWindow?.webContents.send('updater:status', { status: 'available', version: info.version });
+});
+autoUpdater.on('update-not-available', () => {
+  mainWindow?.webContents.send('updater:status', { status: 'not-available' });
+});
+autoUpdater.on('download-progress', (progress) => {
+  mainWindow?.webContents.send('updater:status', { status: 'downloading', progress: progress.percent });
+});
+autoUpdater.on('update-downloaded', (info) => {
+  mainWindow?.webContents.send('updater:status', { status: 'downloaded', version: info.version });
+});
+autoUpdater.on('error', (err) => {
+  mainWindow?.webContents.send('updater:status', { status: 'error', error: err.message });
+});
+
+// Hot update IPC
+ipcMain.handle('hotUpdate:getConfig', () => {
+  return { success: true, config: loadHotUpdateConfig() };
+});
+ipcMain.handle('hotUpdate:setConfig', (_, config) => {
+  return saveHotUpdateConfig(config);
+});
+ipcMain.handle('hotUpdate:getSource', () => {
+  const source = getRendererSource();
+  return { success: true, source: source.type === 'server' ? 'server' : 'local' };
+});
+ipcMain.handle('hotUpdate:checkServer', async (_, url) => {
+  try {
+    const baseUrl = normalizeServerUrl(url);
+    if (!baseUrl) return { success: false, available: false, error: 'Server URL is required' };
+
+    // Use http/https module for compatibility with all Node.js versions
+    const httpModule = baseUrl.startsWith('https') ? require('https') : require('http');
+    
+    const checkUrl = (endpoint) => new Promise((resolve, reject) => {
+      const req = httpModule.get(`${baseUrl}${endpoint}`, { timeout: 5000 }, (res) => {
+        let data = '';
+        res.on('data', chunk => data += chunk);
+        res.on('end', () => {
+          if (res.statusCode === 200) {
+            try { resolve(JSON.parse(data)); } catch { resolve({ status: 'ok' }); }
+          } else {
+            reject(new Error(`HTTP ${res.statusCode}`));
+          }
+        });
+      });
+      req.on('error', reject);
+      req.on('timeout', () => { req.destroy(); reject(new Error('Timeout')); });
+    });
+
+    // Try webapp-version first, then health as fallback
+    try {
+      const version = await checkUrl('/api/webapp-version');
+      return { success: true, available: true, version };
+    } catch {
+      try {
+        const health = await checkUrl('/api/health');
+        return { success: true, available: true, version: { version: health.version || 'unknown' } };
+      } catch (e2) {
+        return { success: false, available: false, error: e2.message };
+      }
+    }
+  } catch (e) {
+    return { success: false, available: false, error: e.message };
+  }
+});
+ipcMain.handle('hotUpdate:reload', async () => {
+  try {
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      return { success: false, error: 'Main window not available' };
+    }
+    loadRendererRoute(mainWindow, '/');
+    return { success: true, source: getRendererSource().type === 'server' ? 'server' : 'local' };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+// AGT signing (simplified - crypto only, no external modules needed)
+ipcMain.handle('agt:calculate-hash', (_, { data }) => ({
+  success: true,
+  hash: crypto.createHash('sha256').update(data).digest('hex')
+}));
+
+// ============= TRANSACTION ENGINE IPC HANDLERS =============
+const txEngine = require('./transactionEngine.cjs');
+
+// Generic transaction wrapper: acquires client, BEGIN/COMMIT/ROLLBACK
+async function withTransaction(fn) {
+  if (!pool) return { success: false, error: 'Database not connected' };
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await fn(client);
+    await client.query('COMMIT');
+    return { success: true, data: result };
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    return { success: false, error: error.message };
+  } finally {
+    client.release();
+  }
+}
+
+// Process Sale (atomic: sale + items + stock + journal + open items + tax)
+ipcMain.handle('tx:processSale', async (_, saleData) => {
+  const result = await withTransaction(client => txEngine.processSale(client, pool, saleData));
+  if (result.success) {
+    broadcastUpdate('sales', 'insert', result.data?.id);
+    broadcastUpdate('products', 'update', null);
+  }
+  return result;
+});
+
+ipcMain.handle('tx:processTransaction', async (_, txData) => {
+  const result = await withTransaction(client => txEngine.processTransaction(client, pool, txData));
+  if (result.success) {
+    if (txData?.stockEntries?.length) {
+      broadcastUpdate('products', 'update', null);
+    }
+    if (txData?.entityBalanceUpdate?.entityType === 'supplier') {
+      broadcastUpdate('suppliers', 'update', txData.entityBalanceUpdate.entityId);
+    }
+    if (txData?.entityBalanceUpdate?.entityType === 'customer') {
+      broadcastUpdate('clients', 'update', txData.entityBalanceUpdate.entityId);
+    }
+  }
+  return result;
+});
+
+// Process Purchase Receive (atomic: stock IN + WAC + journal + open items)
+ipcMain.handle('tx:processPurchaseReceive', async (_, orderId, receivedQuantities, receivedBy) => {
+  const result = await withTransaction(client => txEngine.processPurchaseReceive(client, pool, orderId, receivedQuantities, receivedBy));
+  if (result.success) {
+    broadcastUpdate('purchase_orders', 'update', orderId);
+    broadcastUpdate('products', 'update', null);
+  }
+  return result;
+});
+
+// Process Transfer Approve (stock OUT from source)
+ipcMain.handle('tx:processTransferApprove', async (_, transferId, approvedBy) => {
+  const result = await withTransaction(client => txEngine.processTransferApprove(client, pool, transferId, approvedBy));
+  if (result.success) {
+    broadcastUpdate('stock_transfers', 'update', transferId);
+    broadcastUpdate('products', 'update', null);
+  }
+  return result;
+});
+
+// Process Transfer Receive (stock IN at destination + journal)
+ipcMain.handle('tx:processTransferReceive', async (_, transferId, receivedQuantities, receivedBy) => {
+  const result = await withTransaction(client => txEngine.processTransferReceive(client, pool, transferId, receivedQuantities, receivedBy));
+  if (result.success) {
+    broadcastUpdate('stock_transfers', 'update', transferId);
+    broadcastUpdate('products', 'update', null);
+  }
+  return result;
+});
+
+// Process Payment (payment + journal + open item clearing)
+ipcMain.handle('tx:processPayment', async (_, paymentData) => {
+  const result = await withTransaction(client => txEngine.processPayment(client, pool, paymentData));
+  if (result.success) broadcastUpdate('payments', 'insert', result.data?.id);
+  return result;
+});
+
+// Record Stock Movement (standalone)
+ipcMain.handle('tx:recordStockMovement', async (_, movementData) => {
+  const result = await withTransaction(client => txEngine.recordStockMovement(client, movementData));
+  if (result.success) {
+    broadcastUpdate('products', 'update', null);
+  }
+  return result;
+});
+
+// Generate invoice number
+ipcMain.handle('tx:generateInvoiceNumber', async (_, branchCode) => {
+  if (!pool) return { success: false, error: 'Database not connected' };
+  try {
+    const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    const prefix = `FT${branchCode || ''}${today}`;
+    const result = await pool.query(
+      `SELECT COUNT(*) as count FROM sales WHERE invoice_number LIKE $1`,
+      [`${prefix}%`]
+    );
+    const seq = (parseInt(result.rows[0].count) + 1).toString().padStart(4, '0');
+    return { success: true, data: { invoiceNumber: `${prefix}${seq}` } };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+console.log('🏢 Kwanza ERP - Main process loaded (Direct PostgreSQL mode)');
+console.log(`📁 Install directory: ${INSTALL_DIR}`);
+console.log(`📄 IP file: ${IP_FILE_PATH}`);

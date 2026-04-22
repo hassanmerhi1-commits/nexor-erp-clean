@@ -1,0 +1,283 @@
+// Chart of Accounts API routes
+const express = require('express');
+const db = require('../db');
+
+module.exports = function(broadcastTable) {
+  const router = express.Router();
+
+  // Get all accounts with hierarchy
+  router.get('/', async (req, res) => {
+    try {
+      const result = await db.query(`
+        SELECT 
+          coa.*,
+          parent.name as parent_name,
+          parent.code as parent_code,
+          (SELECT COUNT(*) FROM chart_of_accounts child WHERE child.parent_id = coa.id) as children_count
+        FROM chart_of_accounts coa
+        LEFT JOIN chart_of_accounts parent ON coa.parent_id = parent.id
+        WHERE coa.is_active = true
+        ORDER BY coa.code
+      `);
+      res.json(result.rows);
+    } catch (error) {
+      console.error('[CHART OF ACCOUNTS ERROR]', error);
+      res.status(500).json({ error: 'Failed to fetch accounts' });
+    }
+  });
+
+  // Get account by ID
+  router.get('/:id', async (req, res) => {
+    try {
+      const { id } = req.params;
+      const result = await db.query(`
+        SELECT 
+          coa.*,
+          parent.name as parent_name,
+          parent.code as parent_code
+        FROM chart_of_accounts coa
+        LEFT JOIN chart_of_accounts parent ON coa.parent_id = parent.id
+        WHERE coa.id = $1
+      `, [id]);
+      
+      if (result.rows.length === 0) {
+        return res.status(404).json({ error: 'Account not found' });
+      }
+      res.json(result.rows[0]);
+    } catch (error) {
+      console.error('[CHART OF ACCOUNTS ERROR]', error);
+      res.status(500).json({ error: 'Failed to fetch account' });
+    }
+  });
+
+  // Get accounts by type
+  router.get('/type/:type', async (req, res) => {
+    try {
+      const { type } = req.params;
+      const result = await db.query(`
+        SELECT * FROM chart_of_accounts 
+        WHERE account_type = $1 AND is_active = true
+        ORDER BY code
+      `, [type]);
+      res.json(result.rows);
+    } catch (error) {
+      console.error('[CHART OF ACCOUNTS ERROR]', error);
+      res.status(500).json({ error: 'Failed to fetch accounts by type' });
+    }
+  });
+
+  // Get children of an account
+  router.get('/:id/children', async (req, res) => {
+    try {
+      const { id } = req.params;
+      const result = await db.query(`
+        SELECT * FROM chart_of_accounts 
+        WHERE parent_id = $1 AND is_active = true
+        ORDER BY code
+      `, [id]);
+      res.json(result.rows);
+    } catch (error) {
+      console.error('[CHART OF ACCOUNTS ERROR]', error);
+      res.status(500).json({ error: 'Failed to fetch child accounts' });
+    }
+  });
+
+  // Create new account
+  router.post('/', async (req, res) => {
+    try {
+      const { 
+        code, name, description, account_type, account_nature,
+        parent_id, level, is_header, opening_balance, branch_id 
+      } = req.body;
+
+      // Validate required fields
+      if (!code || !name || !account_type || !account_nature) {
+        return res.status(400).json({ error: 'Missing required fields' });
+      }
+
+      // Check for duplicate code
+      const existing = await db.query('SELECT id FROM chart_of_accounts WHERE code = $1', [code]);
+      if (existing.rows.length > 0) {
+        return res.status(400).json({ error: 'Account code already exists' });
+      }
+
+      const result = await db.query(`
+        INSERT INTO chart_of_accounts 
+        (code, name, description, account_type, account_nature, parent_id, level, is_header, opening_balance, current_balance, branch_id)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, $10)
+        RETURNING *
+      `, [code, name, description, account_type, account_nature, parent_id, level || 1, is_header || false, opening_balance || 0, branch_id]);
+
+      await broadcastTable('chart_of_accounts');
+      res.status(201).json(result.rows[0]);
+    } catch (error) {
+      console.error('[CHART OF ACCOUNTS ERROR]', error);
+      res.status(500).json({ error: 'Failed to create account' });
+    }
+  });
+
+  // Update account
+  router.put('/:id', async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { 
+        code, name, description, account_type, account_nature,
+        parent_id, level, is_header, is_active, opening_balance 
+      } = req.body;
+
+      // Check for duplicate code (excluding current account)
+      if (code) {
+        const existing = await db.query('SELECT id FROM chart_of_accounts WHERE code = $1 AND id != $2', [code, id]);
+        if (existing.rows.length > 0) {
+          return res.status(400).json({ error: 'Account code already exists' });
+        }
+      }
+
+      const result = await db.query(`
+        UPDATE chart_of_accounts SET
+          code = COALESCE($1, code),
+          name = COALESCE($2, name),
+          description = COALESCE($3, description),
+          account_type = COALESCE($4, account_type),
+          account_nature = COALESCE($5, account_nature),
+          parent_id = $6,
+          level = COALESCE($7, level),
+          is_header = COALESCE($8, is_header),
+          is_active = COALESCE($9, is_active),
+          opening_balance = COALESCE($10, opening_balance),
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = $11
+        RETURNING *
+      `, [code, name, description, account_type, account_nature, parent_id, level, is_header, is_active, opening_balance, id]);
+
+      if (result.rows.length === 0) {
+        return res.status(404).json({ error: 'Account not found' });
+      }
+
+      await broadcastTable('chart_of_accounts');
+      res.json(result.rows[0]);
+    } catch (error) {
+      console.error('[CHART OF ACCOUNTS ERROR]', error);
+      res.status(500).json({ error: 'Failed to update account' });
+    }
+  });
+
+  // Delete (soft) account
+  router.delete('/:id', async (req, res) => {
+    try {
+      const { id } = req.params;
+      
+      // Check if account has children
+      const children = await db.query('SELECT id FROM chart_of_accounts WHERE parent_id = $1', [id]);
+      if (children.rows.length > 0) {
+        return res.status(400).json({ error: 'Cannot delete account with child accounts' });
+      }
+
+      // Check if account has journal entries
+      const entries = await db.query('SELECT id FROM journal_entry_lines WHERE account_id = $1 LIMIT 1', [id]);
+      if (entries.rows.length > 0) {
+        return res.status(400).json({ error: 'Cannot delete account with transactions' });
+      }
+
+      await db.query('UPDATE chart_of_accounts SET is_active = false WHERE id = $1', [id]);
+      await broadcastTable('chart_of_accounts');
+      res.json({ success: true });
+    } catch (error) {
+      console.error('[CHART OF ACCOUNTS ERROR]', error);
+      res.status(500).json({ error: 'Failed to delete account' });
+    }
+  });
+
+  // Get account balance with movements
+  router.get('/:id/balance', async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { start_date, end_date } = req.query;
+
+      let dateFilter = '';
+      const params = [id];
+
+      if (start_date && end_date) {
+        dateFilter = 'AND je.entry_date BETWEEN $2 AND $3';
+        params.push(start_date, end_date);
+      }
+
+      const result = await db.query(`
+        SELECT 
+          coa.id,
+          coa.code,
+          coa.name,
+          coa.account_type,
+          coa.account_nature,
+          coa.opening_balance,
+          COALESCE(SUM(jel.debit_amount), 0) as total_debits,
+          COALESCE(SUM(jel.credit_amount), 0) as total_credits,
+          coa.opening_balance + 
+            CASE 
+              WHEN coa.account_nature = 'debit' THEN COALESCE(SUM(jel.debit_amount), 0) - COALESCE(SUM(jel.credit_amount), 0)
+              ELSE COALESCE(SUM(jel.credit_amount), 0) - COALESCE(SUM(jel.debit_amount), 0)
+            END as current_balance
+        FROM chart_of_accounts coa
+        LEFT JOIN journal_entry_lines jel ON jel.account_id = coa.id
+        LEFT JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.is_posted = true ${dateFilter}
+        WHERE coa.id = $1
+        GROUP BY coa.id
+      `, params);
+
+      if (result.rows.length === 0) {
+        return res.status(404).json({ error: 'Account not found' });
+      }
+      res.json(result.rows[0]);
+    } catch (error) {
+      console.error('[CHART OF ACCOUNTS ERROR]', error);
+      res.status(500).json({ error: 'Failed to get account balance' });
+    }
+  });
+
+  // Get trial balance
+  router.get('/reports/trial-balance', async (req, res) => {
+    try {
+      const { start_date, end_date } = req.query;
+
+      let dateFilter = '';
+      const params = [];
+
+      if (start_date && end_date) {
+        dateFilter = 'AND je.entry_date BETWEEN $1 AND $2';
+        params.push(start_date, end_date);
+      }
+
+      const result = await db.query(`
+        SELECT 
+          coa.id,
+          coa.code,
+          coa.name,
+          coa.account_type,
+          coa.account_nature,
+          coa.level,
+          coa.is_header,
+          coa.opening_balance,
+          COALESCE(SUM(jel.debit_amount), 0) as total_debits,
+          COALESCE(SUM(jel.credit_amount), 0) as total_credits,
+          coa.opening_balance + 
+            CASE 
+              WHEN coa.account_nature = 'debit' THEN COALESCE(SUM(jel.debit_amount), 0) - COALESCE(SUM(jel.credit_amount), 0)
+              ELSE COALESCE(SUM(jel.credit_amount), 0) - COALESCE(SUM(jel.debit_amount), 0)
+            END as closing_balance
+        FROM chart_of_accounts coa
+        LEFT JOIN journal_entry_lines jel ON jel.account_id = coa.id
+        LEFT JOIN journal_entries je ON je.id = jel.journal_entry_id AND je.is_posted = true ${dateFilter}
+        WHERE coa.is_active = true
+        GROUP BY coa.id
+        ORDER BY coa.code
+      `, params);
+
+      res.json(result.rows);
+    } catch (error) {
+      console.error('[CHART OF ACCOUNTS ERROR]', error);
+      res.status(500).json({ error: 'Failed to generate trial balance' });
+    }
+  });
+
+  return router;
+};

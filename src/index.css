@@ -1,0 +1,184 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 220 20% 97%;
+    --foreground: 230 25% 15%;
+    --card: 0 0% 100%;
+    --card-foreground: 230 25% 15%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 230 25% 15%;
+    --primary: 245 58% 51%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 220 14% 94%;
+    --secondary-foreground: 230 25% 15%;
+    --muted: 220 14% 94%;
+    --muted-foreground: 220 10% 46%;
+    --accent: 245 58% 96%;
+    --accent-foreground: 245 58% 51%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 220 13% 90%;
+    --input: 220 13% 90%;
+    --ring: 245 58% 51%;
+    --radius: 0.75rem;
+
+    /* Extended palette */
+    --success: 152 57% 46%;
+    --success-foreground: 0 0% 100%;
+    --warning: 38 92% 50%;
+    --warning-foreground: 0 0% 100%;
+    --info: 205 78% 56%;
+    --info-foreground: 0 0% 100%;
+
+    /* Gradient tokens */
+    --gradient-primary: linear-gradient(135deg, hsl(245 58% 51%), hsl(280 60% 55%));
+    --gradient-accent: linear-gradient(135deg, hsl(205 78% 56%), hsl(245 58% 51%));
+    --gradient-warm: linear-gradient(135deg, hsl(38 92% 50%), hsl(15 80% 55%));
+    --gradient-success: linear-gradient(135deg, hsl(152 57% 46%), hsl(170 60% 45%));
+
+    /* Shadows */
+    --shadow-sm: 0 1px 2px 0 hsl(230 25% 15% / 0.05);
+    --shadow-md: 0 4px 6px -1px hsl(230 25% 15% / 0.07), 0 2px 4px -2px hsl(230 25% 15% / 0.05);
+    --shadow-lg: 0 10px 15px -3px hsl(230 25% 15% / 0.08), 0 4px 6px -4px hsl(230 25% 15% / 0.04);
+    --shadow-xl: 0 20px 25px -5px hsl(230 25% 15% / 0.1), 0 8px 10px -6px hsl(230 25% 15% / 0.06);
+    --shadow-glow: 0 0 20px -5px hsl(245 58% 51% / 0.25);
+
+    --sidebar-background: 230 25% 15%;
+    --sidebar-foreground: 220 14% 94%;
+    --sidebar-primary: 245 58% 65%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 230 20% 22%;
+    --sidebar-accent-foreground: 220 14% 94%;
+    --sidebar-border: 230 20% 22%;
+    --sidebar-ring: 245 58% 51%;
+  }
+
+  .dark {
+    --background: 230 25% 9%;
+    --foreground: 220 14% 94%;
+    --card: 230 20% 12%;
+    --card-foreground: 220 14% 94%;
+    --popover: 230 20% 12%;
+    --popover-foreground: 220 14% 94%;
+    --primary: 245 58% 65%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 230 15% 18%;
+    --secondary-foreground: 220 14% 94%;
+    --muted: 230 15% 18%;
+    --muted-foreground: 220 10% 55%;
+    --accent: 245 30% 20%;
+    --accent-foreground: 245 58% 75%;
+    --destructive: 0 62% 55%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 230 15% 20%;
+    --input: 230 15% 20%;
+    --ring: 245 58% 65%;
+
+    --success: 152 57% 50%;
+    --success-foreground: 0 0% 100%;
+    --warning: 38 92% 55%;
+    --warning-foreground: 0 0% 100%;
+    --info: 205 78% 60%;
+    --info-foreground: 0 0% 100%;
+
+    --gradient-primary: linear-gradient(135deg, hsl(245 58% 55%), hsl(280 60% 60%));
+    --gradient-accent: linear-gradient(135deg, hsl(205 78% 50%), hsl(245 58% 55%));
+
+    --shadow-sm: 0 1px 2px 0 hsl(0 0% 0% / 0.3);
+    --shadow-md: 0 4px 6px -1px hsl(0 0% 0% / 0.3), 0 2px 4px -2px hsl(0 0% 0% / 0.2);
+    --shadow-lg: 0 10px 15px -3px hsl(0 0% 0% / 0.3), 0 4px 6px -4px hsl(0 0% 0% / 0.2);
+    --shadow-xl: 0 20px 25px -5px hsl(0 0% 0% / 0.4), 0 8px 10px -6px hsl(0 0% 0% / 0.3);
+    --shadow-glow: 0 0 20px -5px hsl(245 58% 65% / 0.3);
+
+    --sidebar-background: 230 25% 7%;
+    --sidebar-foreground: 220 14% 85%;
+    --sidebar-primary: 245 58% 65%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 230 20% 14%;
+    --sidebar-accent-foreground: 220 14% 85%;
+    --sidebar-border: 230 20% 14%;
+    --sidebar-ring: 245 58% 65%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
+  }
+}
+
+@layer utilities {
+  .glass {
+    @apply bg-card/80 backdrop-blur-xl border border-border/50;
+  }
+  .gradient-primary {
+    background: var(--gradient-primary);
+  }
+  .gradient-accent {
+    background: var(--gradient-accent);
+  }
+  .gradient-warm {
+    background: var(--gradient-warm);
+  }
+  .gradient-success {
+    background: var(--gradient-success);
+  }
+  .shadow-card {
+    box-shadow: var(--shadow-md);
+  }
+  .shadow-card-hover {
+    box-shadow: var(--shadow-lg);
+  }
+  .shadow-glow {
+    box-shadow: var(--shadow-glow);
+  }
+  .text-gradient {
+    @apply bg-clip-text text-transparent;
+    background: var(--gradient-primary);
+  }
+}
+
+/* Print styles for receipts */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  .print\:block,
+  .print\:block * {
+    visibility: visible;
+  }
+  .print\:block {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 80mm;
+  }
+}
+
+/* Modern scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: hsl(var(--muted-foreground) / 0.2);
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--muted-foreground) / 0.35);
+}

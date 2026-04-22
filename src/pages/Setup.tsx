@@ -1,0 +1,348 @@
+import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Badge } from '@/components/ui/badge';
+import { Server, Monitor, Wifi, CheckCircle, XCircle, Loader2, FolderOpen } from 'lucide-react';
+import { toast } from 'sonner';
+
+type SetupMode = 'select' | 'server-setup' | 'client-setup' | 'complete';
+
+export default function Setup() {
+  const navigate = useNavigate();
+  const [mode, setMode] = useState<SetupMode>('select');
+  const [ipFileContent, setIpFileContent] = useState('');
+  const [detectedIp, setDetectedIp] = useState('');
+  const [connectionStatus, setConnectionStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
+  const [isLoading, setIsLoading] = useState(false);
+  const isElectron = !!window.electronAPI?.isElectron;
+
+  // Read current IP file on mount
+  useEffect(() => {
+    if (isElectron && window.electronAPI?.ipfile) {
+      window.electronAPI.ipfile.read().then(content => {
+        if (content?.trim()) {
+          setIpFileContent(content.trim());
+        }
+      });
+    }
+  }, [isElectron]);
+
+  // Detect local IP when in server mode
+  useEffect(() => {
+    if (mode === 'server-setup' && isElectron) {
+      window.electronAPI?.network.getLocalIPs().then(ips => {
+        if (ips?.length > 0) setDetectedIp(ips[0]);
+      });
+    }
+  }, [mode, isElectron]);
+
+  const handleServerSetup = async () => {
+    setIsLoading(true);
+    const dbPath = ipFileContent || 'postgresql://postgres:yel3an7azi@localhost:5432/kwanza_erp';
+
+    try {
+      if (isElectron) {
+        // Write DB path to IP file → server mode
+        await window.electronAPI!.ipfile.write(dbPath);
+        // Re-init database (creates if not exists + starts WS server)
+        const result = await window.electronAPI!.db.init();
+        if (!result.success) throw new Error(result.error);
+
+        toast.success('Servidor configurado!', {
+          description: `Base de dados: ${dbPath}\nOutros computadores podem conectar a ${detectedIp}`
+        });
+      } else {
+        // Web preview - use localStorage fallback
+        localStorage.setItem('kwanza_mode', 'server');
+        localStorage.setItem('kwanza_db_path', dbPath);
+        toast.success('Modo servidor configurado (Preview)');
+      }
+
+      localStorage.setItem('kwanza_setup_complete', 'true');
+      setMode('complete');
+    } catch (error: any) {
+      toast.error('Erro na configuração', { description: error.message });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleClientSetup = async () => {
+    if (!ipFileContent.trim()) {
+      toast.error('Insira o IP ou nome do servidor');
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      if (isElectron) {
+        // Write server address to IP file → client mode
+        await window.electronAPI!.ipfile.write(ipFileContent.trim());
+        const result = await window.electronAPI!.db.init();
+        if (!result.success) throw new Error(result.error);
+
+        toast.success('Cliente configurado!', {
+          description: `Conectado ao servidor: ${ipFileContent.trim()}`
+        });
+      } else {
+        localStorage.setItem('kwanza_mode', 'client');
+        localStorage.setItem('kwanza_server_address', ipFileContent.trim());
+        toast.success('Modo cliente configurado (Preview)');
+      }
+
+      localStorage.setItem('kwanza_setup_complete', 'true');
+      setMode('complete');
+    } catch (error: any) {
+      toast.error('Erro na conexão', { description: error.message });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const testConnection = async () => {
+    setConnectionStatus('testing');
+    try {
+      if (isElectron) {
+        // Write temporarily to test
+        await window.electronAPI!.ipfile.write(ipFileContent.trim());
+        const result = await window.electronAPI!.db.testConnection();
+        setConnectionStatus(result.success ? 'success' : 'error');
+        if (result.success) toast.success('Conexão OK!');
+        else toast.error('Falha na conexão');
+      } else {
+        // Web preview - simulate
+        await new Promise(r => setTimeout(r, 1000));
+        setConnectionStatus('error');
+        toast.error('Servidor não encontrado (apenas funciona no Electron)');
+      }
+    } catch {
+      setConnectionStatus('error');
+      toast.error('Falha na conexão');
+    }
+  };
+
+  const startDemoMode = () => {
+    localStorage.setItem('kwanza_setup_complete', 'true');
+    localStorage.setItem('kwanza_mode', 'demo');
+    toast.success('Modo Demo Activado!', {
+      description: 'Dados armazenados localmente neste dispositivo'
+    });
+    setMode('complete');
+  };
+
+  const finishSetup = () => navigate('/login');
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-primary/20 via-background to-primary/10 flex items-center justify-center p-4">
+      <div className="w-full max-w-2xl">
+        {/* Header */}
+        <div className="text-center mb-8">
+          <div className="mx-auto w-20 h-20 rounded-2xl bg-primary flex items-center justify-center mb-4">
+            <span className="text-primary-foreground font-bold text-4xl">K</span>
+          </div>
+          <h1 className="text-4xl font-bold text-foreground mb-2">Kwanza ERP</h1>
+          <p className="text-muted-foreground text-lg">Configuração Inicial</p>
+        </div>
+
+        {/* Mode Selection */}
+        {mode === 'select' && (
+          <Card className="shadow-2xl">
+            <CardHeader className="text-center pb-4">
+              <CardTitle className="text-2xl">Como este computador será usado?</CardTitle>
+              <CardDescription>
+                Escolha se este computador será o servidor principal ou uma estação de trabalho
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6 px-6 pb-8">
+              <div className="grid gap-4 md:grid-cols-2">
+                <button
+                  className="group border-2 border-border rounded-xl p-6 flex flex-col items-center gap-3 hover:border-primary hover:bg-primary/5 transition-all cursor-pointer"
+                  onClick={() => { setMode('server-setup'); setIpFileContent('postgresql://postgres:yel3an7azi@localhost:5432/kwanza_erp'); }}
+                >
+                  <div className="w-14 h-14 bg-primary/10 rounded-full flex items-center justify-center group-hover:bg-primary/20 transition-colors">
+                    <Server className="h-7 w-7 text-primary" />
+                  </div>
+                  <div className="text-center">
+                    <div className="font-semibold text-lg text-foreground">Servidor</div>
+                    <div className="text-sm text-muted-foreground">
+                      Computador principal com a base de dados. Outros computadores conectam aqui.
+                    </div>
+                  </div>
+                  <Badge variant="secondary">Escritório principal</Badge>
+                </button>
+
+                <button
+                  className="group border-2 border-border rounded-xl p-6 flex flex-col items-center gap-3 hover:border-primary hover:bg-primary/5 transition-all cursor-pointer"
+                  onClick={() => { setMode('client-setup'); setIpFileContent(''); }}
+                >
+                  <div className="w-14 h-14 bg-primary/10 rounded-full flex items-center justify-center group-hover:bg-primary/20 transition-colors">
+                    <Monitor className="h-7 w-7 text-primary" />
+                  </div>
+                  <div className="text-center">
+                    <div className="font-semibold text-lg text-foreground">Cliente</div>
+                    <div className="text-sm text-muted-foreground">
+                      Estação de trabalho que conecta ao servidor. Dados ficam no servidor.
+                    </div>
+                  </div>
+                  <Badge variant="outline">Computadores adicionais</Badge>
+                </button>
+              </div>
+
+              {/* Demo Mode */}
+              <div className="relative">
+                <div className="absolute inset-0 flex items-center"><span className="w-full border-t" /></div>
+                <div className="relative flex justify-center text-xs uppercase">
+                  <span className="bg-card px-2 text-muted-foreground">ou</span>
+                </div>
+              </div>
+
+              <Button
+                variant="outline"
+                className="w-full h-auto py-4"
+                onClick={startDemoMode}
+              >
+                <div className="flex items-center gap-3">
+                  <Monitor className="h-5 w-5 text-muted-foreground" />
+                  <div className="text-left">
+                    <div className="font-semibold">Modo Demo</div>
+                    <div className="text-xs text-muted-foreground">Usar armazenamento local sem rede</div>
+                  </div>
+                </div>
+              </Button>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Server Setup */}
+        {mode === 'server-setup' && (
+          <Card className="shadow-2xl">
+            <CardHeader>
+              <div className="flex items-center gap-3">
+                <Button variant="ghost" size="sm" onClick={() => setMode('select')}>← Voltar</Button>
+                <div>
+                  <CardTitle className="flex items-center gap-2">
+                    <Server className="h-5 w-5 text-primary" /> Configurar Servidor
+                  </CardTitle>
+                   <CardDescription>
+230:                     Configurar conexão PostgreSQL (Docker) para a base de dados
+                   </CardDescription>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="space-y-2">
+                <Label>Conexão PostgreSQL</Label>
+                <div className="flex gap-2">
+                  <Input
+                    value={ipFileContent}
+                    onChange={e => setIpFileContent(e.target.value)}
+                    placeholder="postgresql://postgres:yel3an7azi@localhost:5432/kwanza_erp"
+                  />
+                  <Button variant="outline" size="icon">
+                    <FolderOpen className="h-4 w-4" />
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Docker PostgreSQL será usado automaticamente
+                </p>
+              </div>
+
+              {detectedIp && (
+                <div className="bg-muted/50 rounded-lg p-4">
+                  <div className="flex items-center gap-2 text-sm">
+                    <Wifi className="h-4 w-4 text-primary" />
+                    <span className="text-muted-foreground">IP deste computador:</span>
+                    <span className="font-mono font-bold text-foreground">{detectedIp}</span>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Clientes devem usar este IP (ou nome do computador) no ficheiro IP
+                  </p>
+                </div>
+              )}
+
+              <Button onClick={handleServerSetup} className="w-full" disabled={isLoading}>
+                {isLoading ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Configurando...</>
+                  : <><CheckCircle className="h-4 w-4 mr-2" /> Iniciar Servidor</>}
+              </Button>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Client Setup */}
+        {mode === 'client-setup' && (
+          <Card className="shadow-2xl">
+            <CardHeader>
+              <div className="flex items-center gap-3">
+                <Button variant="ghost" size="sm" onClick={() => setMode('select')}>← Voltar</Button>
+                <div>
+                  <CardTitle className="flex items-center gap-2">
+                    <Monitor className="h-5 w-5 text-primary" /> Configurar Cliente
+                  </CardTitle>
+                  <CardDescription>
+                    Insira o IP ou nome do computador servidor
+                  </CardDescription>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="space-y-2">
+                <Label>Endereço do Servidor</Label>
+                <Input
+                  value={ipFileContent}
+                  onChange={e => setIpFileContent(e.target.value)}
+                  placeholder="10.0.0.5 ou SERVIDOR"
+                />
+                <p className="text-xs text-muted-foreground">
+                  IP ou nome do computador onde o servidor está a correr
+                </p>
+              </div>
+
+              <div className="flex gap-2">
+                <Button variant="outline" className="flex-1" onClick={testConnection} disabled={!ipFileContent.trim()}>
+                  {connectionStatus === 'testing' ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Wifi className="h-4 w-4 mr-2" />}
+                  Testar Conexão
+                </Button>
+                {connectionStatus === 'success' && <Badge className="bg-primary/10 text-primary border-primary/20"><CheckCircle className="h-3 w-3 mr-1" />OK</Badge>}
+                {connectionStatus === 'error' && <Badge variant="destructive"><XCircle className="h-3 w-3 mr-1" />Falhou</Badge>}
+              </div>
+
+              <Button onClick={handleClientSetup} className="w-full" disabled={isLoading || !ipFileContent.trim()}>
+                {isLoading ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Conectando...</>
+                  : <><CheckCircle className="h-4 w-4 mr-2" /> Conectar ao Servidor</>}
+              </Button>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Complete */}
+        {mode === 'complete' && (
+          <Card className="shadow-2xl">
+            <CardContent className="py-12 text-center space-y-6">
+              <div className="w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center mx-auto">
+                <CheckCircle className="h-8 w-8 text-primary" />
+              </div>
+              <div>
+                <h2 className="text-2xl font-bold text-foreground">Configuração Completa!</h2>
+                <p className="text-muted-foreground mt-2">
+                  O sistema está pronto para usar. Faça login para começar.
+                </p>
+              </div>
+              <Button size="lg" onClick={finishSetup}>
+                Ir para Login
+              </Button>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Info footer */}
+        <div className="mt-6 text-center text-xs text-muted-foreground">
+          <p>Base de dados: PostgreSQL (Docker)</p>
+          <p className="mt-1">Servidor = conexão PostgreSQL | Cliente = IP do servidor</p>
+        </div>
+      </div>
+    </div>
+  );
+}

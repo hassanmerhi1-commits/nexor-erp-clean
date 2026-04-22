@@ -1,0 +1,296 @@
+import { useState, useMemo } from 'react';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Badge } from '@/components/ui/badge';
+import { useClients, useSales } from '@/hooks/useERP';
+import { Download, Printer, FileText, Search, TrendingUp, TrendingDown } from 'lucide-react';
+import { format, parseISO, isWithinInterval, startOfMonth, endOfMonth } from 'date-fns';
+import { pt } from 'date-fns/locale';
+import { exportToExcel } from '@/lib/excel';
+
+interface StatementEntry {
+  id: string;
+  date: string;
+  type: 'invoice' | 'payment' | 'credit_note' | 'debit_note';
+  reference: string;
+  description: string;
+  debit: number;
+  credit: number;
+  balance: number;
+}
+
+export default function ClientStatementReport() {
+  const { clients } = useClients();
+  const { sales } = useSales();
+  
+  const [selectedClient, setSelectedClient] = useState<string>('');
+  const [dateFrom, setDateFrom] = useState(format(startOfMonth(new Date()), 'yyyy-MM-dd'));
+  const [dateTo, setDateTo] = useState(format(endOfMonth(new Date()), 'yyyy-MM-dd'));
+  const [searchTerm, setSearchTerm] = useState('');
+
+  const selectedClientData = useMemo(() => {
+    return clients.find(c => c.id === selectedClient);
+  }, [clients, selectedClient]);
+
+  const statementEntries = useMemo((): StatementEntry[] => {
+    if (!selectedClient) return [];
+    
+    // Get sales for this client
+    const clientSales = sales.filter(sale => {
+      const saleDate = sale.createdAt.split('T')[0];
+      const matchesClient = sale.customerNif === selectedClientData?.nif || 
+                           sale.customerName === selectedClientData?.name;
+      const matchesDate = saleDate >= dateFrom && saleDate <= dateTo;
+      return matchesClient && matchesDate;
+    });
+
+    let runningBalance = selectedClientData?.currentBalance || 0;
+    
+    // Create statement entries from sales (debits - money owed by client)
+    const entries: StatementEntry[] = clientSales
+      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
+      .map(sale => {
+        // If payment was credit-based, it's a debit (they owe us)
+        const isCredit = sale.paymentMethod === 'transfer'; // Simplified logic
+        const debit = sale.total;
+        const credit = sale.amountPaid >= sale.total ? sale.total : 0;
+        runningBalance = runningBalance + debit - credit;
+        
+        return {
+          id: sale.id,
+          date: sale.createdAt,
+          type: 'invoice' as const,
+          reference: sale.invoiceNumber,
+          description: `Fatura - ${sale.items.length} item(s)`,
+          debit: debit,
+          credit: credit,
+          balance: runningBalance,
+        };
+      });
+
+    return entries;
+  }, [selectedClient, selectedClientData, sales, dateFrom, dateTo]);
+
+  const totals = useMemo(() => {
+    return statementEntries.reduce((acc, entry) => ({
+      debit: acc.debit + entry.debit,
+      credit: acc.credit + entry.credit,
+    }), { debit: 0, credit: 0 });
+  }, [statementEntries]);
+
+  const filteredClients = useMemo(() => {
+    if (!searchTerm) return clients;
+    const term = searchTerm.toLowerCase();
+    return clients.filter(c => 
+      c.name.toLowerCase().includes(term) || 
+      c.nif.toLowerCase().includes(term)
+    );
+  }, [clients, searchTerm]);
+
+  const formatCurrency = (value: number) => {
+    return new Intl.NumberFormat('pt-AO', { 
+      style: 'currency', 
+      currency: 'AOA',
+      minimumFractionDigits: 2 
+    }).format(value);
+  };
+
+  const handleExport = () => {
+    if (!selectedClientData) return;
+    
+    const data = statementEntries.map(entry => ({
+      'Data': format(parseISO(entry.date), 'dd/MM/yyyy'),
+      'Tipo': entry.type === 'invoice' ? 'Fatura' : 
+              entry.type === 'payment' ? 'Pagamento' :
+              entry.type === 'credit_note' ? 'Nota Crédito' : 'Nota Débito',
+      'Referência': entry.reference,
+      'Descrição': entry.description,
+      'Débito': entry.debit,
+      'Crédito': entry.credit,
+      'Saldo': entry.balance,
+    }));
+    
+    exportToExcel(data, `Extracto_${selectedClientData.name}_${format(new Date(), 'yyyyMMdd')}`);
+  };
+
+  const handlePrint = () => {
+    window.print();
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Filters */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <FileText className="w-5 h-5" />
+            Extracto de Conta - Cliente
+          </CardTitle>
+          <CardDescription>
+            Movimentos financeiros por cliente com saldo corrente
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div className="md:col-span-2">
+              <Label>Cliente</Label>
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                <Input
+                  placeholder="Pesquisar cliente..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="pl-9 mb-2"
+                />
+              </div>
+              <Select value={selectedClient} onValueChange={setSelectedClient}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Selecione um cliente" />
+                </SelectTrigger>
+                <SelectContent>
+                  {filteredClients.map(client => (
+                    <SelectItem key={client.id} value={client.id}>
+                      {client.name} ({client.nif})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>Data Início</Label>
+              <Input
+                type="date"
+                value={dateFrom}
+                onChange={(e) => setDateFrom(e.target.value)}
+              />
+            </div>
+            <div>
+              <Label>Data Fim</Label>
+              <Input
+                type="date"
+                value={dateTo}
+                onChange={(e) => setDateTo(e.target.value)}
+              />
+            </div>
+          </div>
+          
+          {selectedClientData && (
+            <div className="mt-4 p-4 bg-muted/50 rounded-lg">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div>
+                  <p className="text-sm text-muted-foreground">Cliente</p>
+                  <p className="font-semibold">{selectedClientData.name}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">NIF</p>
+                  <p className="font-semibold">{selectedClientData.nif}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Limite de Crédito</p>
+                  <p className="font-semibold">{formatCurrency(selectedClientData.creditLimit)}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Saldo Actual</p>
+                  <p className={`font-semibold ${selectedClientData.currentBalance > 0 ? 'text-red-500' : 'text-green-500'}`}>
+                    {formatCurrency(selectedClientData.currentBalance)}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Statement Table */}
+      {selectedClient && (
+        <Card>
+          <CardHeader>
+            <div className="flex justify-between items-center">
+              <CardTitle>Movimentos</CardTitle>
+              <div className="flex gap-2">
+                <Button variant="outline" size="sm" onClick={handleExport}>
+                  <Download className="w-4 h-4 mr-2" />
+                  Excel
+                </Button>
+                <Button variant="outline" size="sm" onClick={handlePrint}>
+                  <Printer className="w-4 h-4 mr-2" />
+                  Imprimir
+                </Button>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Data</TableHead>
+                  <TableHead>Tipo</TableHead>
+                  <TableHead>Referência</TableHead>
+                  <TableHead>Descrição</TableHead>
+                  <TableHead className="text-right">Débito</TableHead>
+                  <TableHead className="text-right">Crédito</TableHead>
+                  <TableHead className="text-right">Saldo</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {statementEntries.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
+                      Nenhum movimento encontrado para o período seleccionado
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  <>
+                    {statementEntries.map((entry) => (
+                      <TableRow key={entry.id}>
+                        <TableCell>
+                          {format(parseISO(entry.date), 'dd/MM/yyyy', { locale: pt })}
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant={entry.type === 'invoice' ? 'default' : 
+                                         entry.type === 'payment' ? 'secondary' : 'outline'}>
+                            {entry.type === 'invoice' ? 'Fatura' : 
+                             entry.type === 'payment' ? 'Pagamento' :
+                             entry.type === 'credit_note' ? 'NC' : 'ND'}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="font-mono text-sm">{entry.reference}</TableCell>
+                        <TableCell>{entry.description}</TableCell>
+                        <TableCell className="text-right text-red-500">
+                          {entry.debit > 0 ? formatCurrency(entry.debit) : '-'}
+                        </TableCell>
+                        <TableCell className="text-right text-green-500">
+                          {entry.credit > 0 ? formatCurrency(entry.credit) : '-'}
+                        </TableCell>
+                        <TableCell className={`text-right font-medium ${entry.balance > 0 ? 'text-red-500' : 'text-green-500'}`}>
+                          {formatCurrency(entry.balance)}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                    {/* Totals Row */}
+                    <TableRow className="bg-muted/50 font-bold">
+                      <TableCell colSpan={4}>TOTAIS</TableCell>
+                      <TableCell className="text-right text-red-500">
+                        {formatCurrency(totals.debit)}
+                      </TableCell>
+                      <TableCell className="text-right text-green-500">
+                        {formatCurrency(totals.credit)}
+                      </TableCell>
+                      <TableCell className={`text-right ${(totals.debit - totals.credit) > 0 ? 'text-red-500' : 'text-green-500'}`}>
+                        {formatCurrency(totals.debit - totals.credit)}
+                      </TableCell>
+                    </TableRow>
+                  </>
+                )}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
+}

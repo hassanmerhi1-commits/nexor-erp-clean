@@ -1,0 +1,491 @@
+/**
+ * Chart of Accounts Engine
+ * 
+ * Automatically creates sub-accounts for suppliers/clients
+ * and updates account balances when journal entries are posted.
+ * 
+ * Dual-mode: tries API first (for Electron/server), falls back to localStorage.
+ */
+
+import { Account } from '@/types/accounting';
+import { api } from '@/lib/api/client';
+
+const LOCAL_COA_STORAGE_KEY = 'kwanzaerp_chart_of_accounts';
+
+type AccountType = 'asset' | 'liability' | 'equity' | 'revenue' | 'expense';
+
+// ============= LOCAL STORAGE HELPERS =============
+
+function loadAccountsLocal(): Account[] {
+  try {
+    const raw = localStorage.getItem(LOCAL_COA_STORAGE_KEY);
+    const accounts: Account[] = raw ? JSON.parse(raw) : [];
+    return ensureEssentialAccounts(accounts);
+  } catch { return []; }
+}
+
+function saveAccountsLocal(accounts: Account[]) {
+  localStorage.setItem(LOCAL_COA_STORAGE_KEY, JSON.stringify(
+    [...accounts].sort((a, b) => a.code.localeCompare(b.code))
+  ));
+}
+
+// ============= API HELPERS =============
+
+async function tryApiCreateAccount(account: Account): Promise<boolean> {
+  try {
+    const response = await api.chartOfAccounts.create({
+      code: account.code,
+      name: account.name,
+      description: account.description,
+      account_type: account.account_type,
+      account_nature: account.account_nature,
+      parent_id: account.parent_id,
+      level: account.level,
+      is_header: account.is_header,
+      opening_balance: account.opening_balance,
+      branch_id: account.branch_id,
+    });
+    if (response.error) {
+      console.warn('[CoA Engine] API create failed:', response.error);
+      return false;
+    }
+    console.log(`[CoA Engine] API: Created account ${account.code} — ${account.name}`);
+    return true;
+  } catch (e) {
+    // API not available (web preview mode)
+    return false;
+  }
+}
+
+async function tryApiUpdateBalance(accountCode: string, balanceChange: number): Promise<boolean> {
+  try {
+    // Fetch the account by listing and finding by code
+    const listResponse = await api.chartOfAccounts.list();
+    if (listResponse.error || !listResponse.data) return false;
+    
+    const account = listResponse.data.find((a: any) => a.code === accountCode);
+    if (!account) return false;
+    
+    const newBalance = (account.current_balance || 0) + balanceChange;
+    const response = await api.chartOfAccounts.update(account.id, {
+      current_balance: newBalance,
+    });
+    if (response.error) {
+      console.warn('[CoA Engine] API balance update failed:', response.error);
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function tryLoadAccountsFromApi(): Promise<Account[] | null> {
+  try {
+    const response = await api.chartOfAccounts.list();
+    if (response.error || !response.data) return null;
+    return response.data as Account[];
+  } catch {
+    return null;
+  }
+}
+
+// ============= ESSENTIAL ACCOUNTS =============
+
+function ensureEssentialAccounts(accounts: Account[]): Account[] {
+  const now = new Date().toISOString();
+  const required: Array<{ code: string; name: string; type: AccountType; nature: 'debit' | 'credit'; level: number; is_header: boolean; parent_code: string }> = [
+    { code: '2.1', name: 'Compra de Mercadorias', type: 'asset', nature: 'debit', level: 2, is_header: false, parent_code: '2' },
+    { code: '2.2', name: 'Mercadorias', type: 'asset', nature: 'debit', level: 2, is_header: false, parent_code: '2' },
+    { code: '3.3', name: 'IVA', type: 'liability', nature: 'credit', level: 2, is_header: true, parent_code: '3' },
+    { code: '3.3.1', name: 'IVA Dedutível', type: 'liability', nature: 'debit', level: 3, is_header: false, parent_code: '3.3' },
+    { code: '3.3.2', name: 'IVA Liquidado', type: 'liability', nature: 'credit', level: 3, is_header: false, parent_code: '3.3' },
+    { code: '4.1.1', name: 'Caixa Principal', type: 'asset', nature: 'debit', level: 3, is_header: false, parent_code: '4.1' },
+  ];
+  
+  let changed = false;
+  for (const req of required) {
+    if (accounts.some(a => a.code === req.code)) continue;
+    const parent = accounts.find(a => a.code === req.parent_code);
+    accounts.push({
+      id: `local-coa-${req.code.replace(/\./g, '-')}`,
+      code: req.code,
+      name: req.name,
+      account_type: req.type,
+      account_nature: req.nature,
+      parent_id: parent?.id || null,
+      parent_name: parent?.name || null,
+      parent_code: req.parent_code,
+      level: req.level,
+      is_header: req.is_header,
+      is_active: true,
+      opening_balance: 0,
+      current_balance: 0,
+      branch_id: null,
+      children_count: 0,
+      created_at: now,
+      updated_at: now,
+    } as Account);
+    changed = true;
+  }
+  
+  if (changed) {
+    saveAccountsLocal(accounts);
+  }
+  return accounts;
+}
+
+// ============= BRANCH CAIXA ACCOUNT =============
+
+/**
+ * Ensure each branch has a sub-account under 4.1 (Caixa).
+ * Creates accounts like 4.1.1 Caixa - Sede, 4.1.2 Caixa - Luanda, etc.
+ * Call this on app init / when branches are loaded.
+ */
+export async function ensureBranchCaixaAccounts(branches: { id: string; name: string }[]): Promise<void> {
+  if (!branches || branches.length === 0) return;
+
+  let accounts = await tryLoadAccountsFromApi();
+  const usingApi = accounts !== null;
+
+  if (!accounts) {
+    accounts = loadAccountsLocal();
+  }
+
+  const parent = accounts.find(a => a.code === '4.1');
+  if (!parent) {
+    console.warn('[CoA Engine] Parent account 4.1 (Caixa) not found');
+    return;
+  }
+
+  let changed = false;
+  const now = new Date().toISOString();
+
+  for (const branch of branches) {
+    // Check if this branch already has a caixa account
+    const existing = accounts.find(a =>
+      a.code.startsWith('4.1.') &&
+      a.level >= 3 &&
+      !a.is_header &&
+      (a.branch_id === branch.id || a.name.includes(branch.name))
+    );
+
+    if (existing) continue;
+
+    // Find next sequence
+    const children = accounts.filter(a => a.code.startsWith('4.1.') && a.level === 3 && !a.is_header);
+    const nextSeq = children.length + 1;
+    const code = `4.1.${nextSeq.toString().padStart(1, '0')}`;
+
+    const newAccount: Account = {
+      id: `local-coa-caixa-${branch.id}`,
+      code,
+      name: `Caixa - ${branch.name}`,
+      description: `Conta caixa da filial ${branch.name}`,
+      account_type: 'asset',
+      account_nature: 'debit',
+      parent_id: parent.id,
+      parent_name: parent.name,
+      parent_code: '4.1',
+      level: 3,
+      is_header: false,
+      is_active: true,
+      opening_balance: 0,
+      current_balance: 0,
+      branch_id: branch.id,
+      children_count: 0,
+      created_at: now,
+      updated_at: now,
+    } as Account;
+
+    if (usingApi) {
+      await tryApiCreateAccount(newAccount);
+    }
+
+    // Update parent children count
+    const parentIdx = accounts.findIndex(a => a.id === parent.id);
+    if (parentIdx >= 0) {
+      accounts[parentIdx] = { ...accounts[parentIdx], children_count: (accounts[parentIdx].children_count || 0) + 1 };
+    }
+    accounts.push(newAccount);
+    changed = true;
+    console.log(`[CoA Engine] Created branch caixa account ${code} — Caixa - ${branch.name}`);
+  }
+
+  if (changed) {
+    saveAccountsLocal(accounts);
+  }
+}
+
+// ============= SUPPLIER ACCOUNT =============
+
+/**
+ * Ensure a supplier has a sub-account under 3.2 (Fornecedores).
+ * Returns the proper account code (e.g., "3.2.001").
+ * Now async — tries API first, then localStorage.
+ */
+export async function ensureSupplierAccount(supplierId: string, supplierName: string, supplierNif?: string): Promise<string> {
+  // ALWAYS try to load from the backend API first — it's the source of truth
+  // The backend supplier route auto-creates 3.2.XXX accounts when suppliers are created
+  try {
+    const accounts = await tryLoadAccountsFromApi();
+    if (accounts && accounts.length > 0) {
+      // Search with flexible matching (case-insensitive, trimmed)
+      const normalizedName = supplierName.trim().toLowerCase();
+      const existing = accounts.find(a =>
+        a.code.startsWith('3.2.') &&
+        !a.is_header &&
+        a.is_active !== false &&
+        (
+          a.name?.trim().toLowerCase() === normalizedName ||
+          (supplierNif && supplierNif.trim() && a.description?.includes(supplierNif.trim()))
+        )
+      );
+
+      if (existing) {
+        console.log(`[CoA Engine] Found existing supplier account ${existing.code} — ${supplierName}`);
+        return existing.code;
+      }
+
+      // Not found — create via API (with proper UUID id)
+      const parent = accounts.find(a => a.code === '3.2');
+      if (parent) {
+        const children = accounts.filter(a => a.code.startsWith('3.2.') && a.level === 3 && !a.is_header);
+        const nextSeq = children.length + 1;
+        const code = `3.2.${nextSeq.toString().padStart(3, '0')}`;
+
+        const newAccount: Account = {
+          id: crypto.randomUUID(), // MUST be a valid UUID for the backend
+          code,
+          name: supplierName.trim(),
+          description: supplierNif ? `NIF: ${supplierNif}` : undefined,
+          account_type: 'liability',
+          account_nature: 'credit',
+          parent_id: parent.id,
+          parent_name: parent.name,
+          parent_code: '3.2',
+          level: 3,
+          is_header: false,
+          is_active: true,
+          opening_balance: 0,
+          current_balance: 0,
+          branch_id: null,
+          children_count: 0,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        } as Account;
+
+        const created = await tryApiCreateAccount(newAccount);
+        if (created) {
+          console.log(`[CoA Engine] Created supplier account ${code} — ${supplierName} (via API)`);
+        }
+        // Also cache locally
+        accounts.push(newAccount);
+        saveAccountsLocal(accounts);
+        return code;
+      }
+    }
+  } catch (e) {
+    console.warn('[CoA Engine] API lookup failed, falling back to localStorage:', e);
+  }
+
+  // Fallback: localStorage
+  const localAccounts = loadAccountsLocal();
+  const normalizedName = supplierName.trim().toLowerCase();
+  const localExisting = localAccounts.find(a =>
+    a.code.startsWith('3.2.') &&
+    !a.is_header &&
+    (
+      a.name?.trim().toLowerCase() === normalizedName ||
+      (supplierNif && supplierNif.trim() && a.description?.includes(supplierNif.trim()))
+    )
+  );
+  if (localExisting) return localExisting.code;
+
+  // Create locally as last resort
+  const parent = localAccounts.find(a => a.code === '3.2');
+  const children = localAccounts.filter(a => a.code.startsWith('3.2.') && a.level === 3 && !a.is_header);
+  const nextSeq = children.length + 1;
+  const code = `3.2.${nextSeq.toString().padStart(3, '0')}`;
+
+  const now = new Date().toISOString();
+  localAccounts.push({
+    id: crypto.randomUUID(),
+    code,
+    name: supplierName.trim(),
+    description: supplierNif ? `NIF: ${supplierNif}` : undefined,
+    account_type: 'liability',
+    account_nature: 'credit',
+    parent_id: parent?.id || null,
+    parent_name: parent?.name || null,
+    parent_code: '3.2',
+    level: 3,
+    is_header: false,
+    is_active: true,
+    opening_balance: 0,
+    current_balance: 0,
+    branch_id: null,
+    children_count: 0,
+    created_at: now,
+    updated_at: now,
+  } as Account);
+  saveAccountsLocal(localAccounts);
+  console.log(`[CoA Engine] Created supplier account ${code} — ${supplierName} (localStorage fallback)`);
+  return code;
+}
+
+// ============= CLIENT ACCOUNT =============
+
+/**
+ * Ensure a client has a sub-account under 3.1 (Clientes).
+ * Returns the proper account code (e.g., "3.1.001").
+ */
+export async function ensureClientAccount(clientId: string, clientName: string, clientNif?: string): Promise<string> {
+  let accounts = await tryLoadAccountsFromApi();
+  const usingApi = accounts !== null;
+  
+  if (!accounts) {
+    accounts = loadAccountsLocal();
+  }
+  
+  const existing = accounts.find(a => 
+    a.code.startsWith('3.1.') && 
+    a.level >= 3 && 
+    !a.is_header &&
+    (a.name === clientName || (clientNif && a.description?.includes(clientNif)))
+  );
+  
+  if (existing) return existing.code;
+  
+  const parent = accounts.find(a => a.code === '3.1');
+  if (!parent) return '3.1.001';
+  
+  const children = accounts.filter(a => a.code.startsWith('3.1.') && a.level === 3 && !a.is_header);
+  const nextSeq = children.length + 1;
+  const code = `3.1.${nextSeq.toString().padStart(3, '0')}`;
+  
+  const now = new Date().toISOString();
+  const newAccount: Account = {
+    id: `local-coa-client-${clientId}`,
+    code,
+    name: clientName,
+    description: clientNif ? `NIF: ${clientNif}` : undefined,
+    account_type: 'asset',
+    account_nature: 'debit',
+    parent_id: parent.id,
+    parent_name: parent.name,
+    parent_code: '3.1',
+    level: 3,
+    is_header: false,
+    is_active: true,
+    opening_balance: 0,
+    current_balance: 0,
+    branch_id: null,
+    children_count: 0,
+    created_at: now,
+    updated_at: now,
+  };
+  
+  if (usingApi) {
+    await tryApiCreateAccount(newAccount);
+  }
+  
+  const parentIdx = accounts.findIndex(a => a.id === parent.id);
+  if (parentIdx >= 0) {
+    accounts[parentIdx] = { ...accounts[parentIdx], children_count: (accounts[parentIdx].children_count || 0) + 1 };
+  }
+  accounts.push(newAccount);
+  saveAccountsLocal(accounts);
+  console.log(`[CoA Engine] Created client account ${code} — ${clientName}`);
+  
+  return code;
+}
+
+// ============= BALANCE UPDATES =============
+
+/**
+ * Update account balances in the Chart of Accounts from journal lines.
+ * Now async — syncs to API when available.
+ */
+export async function updateCoABalancesFromJournal(lines: { accountCode: string; debit: number; credit: number }[]) {
+  // Load from API if available, otherwise localStorage
+  let accounts = await tryLoadAccountsFromApi();
+  const usingApi = accounts !== null;
+  
+  if (!accounts) {
+    accounts = loadAccountsLocal();
+  }
+  
+  let changed = false;
+  
+  for (const line of lines) {
+    const account = accounts.find(a => a.code === line.accountCode && a.is_active);
+    if (!account) {
+      console.warn(`[CoA Engine] Account ${line.accountCode} not found for balance update`);
+      continue;
+    }
+    
+    const balanceChange = account.account_nature === 'debit'
+      ? (line.debit || 0) - (line.credit || 0)
+      : (line.credit || 0) - (line.debit || 0);
+    
+    const idx = accounts.findIndex(a => a.id === account.id);
+    if (idx >= 0) {
+      accounts[idx] = {
+        ...accounts[idx],
+        current_balance: (accounts[idx].current_balance || 0) + balanceChange,
+        updated_at: new Date().toISOString(),
+      };
+      changed = true;
+      
+      // Also update via API if available
+      if (usingApi) {
+        try {
+          await api.chartOfAccounts.update(account.id, {
+            current_balance: accounts[idx].current_balance,
+          });
+        } catch (e) {
+          console.warn(`[CoA Engine] API balance update failed for ${account.code}:`, e);
+        }
+      }
+      
+      console.log(`[CoA Engine] ${account.code} ${account.name}: balance ${balanceChange >= 0 ? '+' : ''}${balanceChange.toFixed(2)} → ${accounts[idx].current_balance.toFixed(2)}`);
+    }
+  }
+  
+  if (changed) {
+    rollUpParentBalances(accounts);
+    saveAccountsLocal(accounts);
+    
+    // Update parent balances via API too
+    if (usingApi) {
+      const headers = accounts.filter(a => a.is_header);
+      for (const header of headers) {
+        try {
+          await api.chartOfAccounts.update(header.id, {
+            current_balance: header.current_balance,
+          });
+        } catch { /* best effort */ }
+      }
+    }
+  }
+}
+
+/**
+ * Roll up child account balances to parent header accounts
+ */
+function rollUpParentBalances(accounts: Account[]) {
+  const headers = accounts.filter(a => a.is_header).sort((a, b) => b.level - a.level);
+  
+  for (const header of headers) {
+    const children = accounts.filter(a => a.parent_id === header.id);
+    if (children.length === 0) continue;
+    
+    const sum = children.reduce((total, child) => total + (child.current_balance || 0), 0);
+    const idx = accounts.findIndex(a => a.id === header.id);
+    if (idx >= 0) {
+      accounts[idx] = { ...accounts[idx], current_balance: sum };
+    }
+  }
+}

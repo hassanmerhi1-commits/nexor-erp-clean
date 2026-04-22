@@ -1,0 +1,192 @@
+import { useState } from 'react';
+import { CartItem, Sale } from '@/types/erp';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
+import { Separator } from '@/components/ui/separator';
+import { Banknote, CreditCard, ArrowRightLeft, Check } from 'lucide-react';
+
+interface CheckoutDialogProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  items: CartItem[];
+  total: number;
+  taxAmount: number;
+  onCompleteSale: (
+    paymentMethod: Sale['paymentMethod'],
+    amountPaid: number,
+    customerNif?: string,
+    customerName?: string,
+  ) => void;
+}
+
+export function CheckoutDialog({
+  open,
+  onOpenChange,
+  items,
+  total,
+  taxAmount,
+  onCompleteSale,
+}: CheckoutDialogProps) {
+  const [paymentMethod, setPaymentMethod] = useState<Sale['paymentMethod']>('cash');
+  const [amountPaid, setAmountPaid] = useState<string>(total.toString());
+  const [customerNif, setCustomerNif] = useState('');
+  const [customerName, setCustomerName] = useState('');
+
+  const change = parseFloat(amountPaid || '0') - total;
+  const isValid = parseFloat(amountPaid || '0') >= total;
+
+  const handleComplete = () => {
+    onCompleteSale(
+      paymentMethod,
+      parseFloat(amountPaid),
+      customerNif || undefined,
+      customerName || undefined,
+    );
+  };
+
+  const quickAmounts = [
+    Math.ceil(total / 100) * 100,
+    Math.ceil(total / 500) * 500,
+    Math.ceil(total / 1000) * 1000,
+    Math.ceil(total / 5000) * 5000,
+  ].filter((v, i, a) => a.indexOf(v) === i && v >= total).slice(0, 4);
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Finalizar Venda</DialogTitle>
+        </DialogHeader>
+
+        <div className="space-y-6">
+          {/* Order Summary */}
+          <div className="bg-muted/50 rounded-lg p-4 space-y-2">
+            <div className="flex justify-between text-sm">
+              <span>{items.length} itens</span>
+              <span>{items.reduce((sum, i) => sum + i.quantity, 0)} unidades</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span>IVA</span>
+              <span>{taxAmount.toLocaleString('pt-AO')} Kz</span>
+            </div>
+            <Separator />
+            <div className="flex justify-between text-xl font-bold">
+              <span>Total</span>
+              <span className="text-primary">{total.toLocaleString('pt-AO')} Kz</span>
+            </div>
+          </div>
+
+          {/* Payment Method */}
+          <div className="space-y-3">
+            <Label>Forma de Pagamento</Label>
+            <RadioGroup
+              value={paymentMethod}
+              onValueChange={(v) => setPaymentMethod(v as Sale['paymentMethod'])}
+              className="grid grid-cols-3 gap-2"
+            >
+              <div>
+                <RadioGroupItem value="cash" id="cash" className="peer sr-only" />
+                <Label
+                  htmlFor="cash"
+                  className="flex flex-col items-center justify-center rounded-lg border-2 border-muted bg-popover p-4 hover:bg-accent hover:text-accent-foreground peer-data-[state=checked]:border-primary cursor-pointer"
+                >
+                  <Banknote className="mb-2 h-6 w-6" />
+                  <span className="text-sm">Dinheiro</span>
+                </Label>
+              </div>
+              <div>
+                <RadioGroupItem value="card" id="card" className="peer sr-only" />
+                <Label
+                  htmlFor="card"
+                  className="flex flex-col items-center justify-center rounded-lg border-2 border-muted bg-popover p-4 hover:bg-accent hover:text-accent-foreground peer-data-[state=checked]:border-primary cursor-pointer"
+                >
+                  <CreditCard className="mb-2 h-6 w-6" />
+                  <span className="text-sm">Cartão</span>
+                </Label>
+              </div>
+              <div>
+                <RadioGroupItem value="transfer" id="transfer" className="peer sr-only" />
+                <Label
+                  htmlFor="transfer"
+                  className="flex flex-col items-center justify-center rounded-lg border-2 border-muted bg-popover p-4 hover:bg-accent hover:text-accent-foreground peer-data-[state=checked]:border-primary cursor-pointer"
+                >
+                  <ArrowRightLeft className="mb-2 h-6 w-6" />
+                  <span className="text-sm">Transf.</span>
+                </Label>
+              </div>
+            </RadioGroup>
+          </div>
+
+          {/* Amount Paid (for cash) */}
+          {paymentMethod === 'cash' && (
+            <div className="space-y-3">
+              <Label>Valor Recebido</Label>
+              <Input
+                type="number"
+                value={amountPaid}
+                onChange={(e) => setAmountPaid(e.target.value)}
+                className="text-xl h-14 text-center font-bold"
+                placeholder="0"
+              />
+              <div className="flex gap-2">
+                {quickAmounts.map(amount => (
+                  <Button
+                    key={amount}
+                    variant="outline"
+                    size="sm"
+                    className="flex-1"
+                    onClick={() => setAmountPaid(amount.toString())}
+                  >
+                    {amount.toLocaleString('pt-AO')}
+                  </Button>
+                ))}
+              </div>
+              {change > 0 && (
+                <div className="bg-green-500/10 text-green-600 rounded-lg p-3 text-center">
+                  <span className="text-sm">Troco: </span>
+                  <span className="text-xl font-bold">{change.toLocaleString('pt-AO')} Kz</span>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Customer Info (optional) */}
+          <div className="space-y-3">
+            <Label className="text-muted-foreground">Dados do Cliente (opcional)</Label>
+            <div className="grid grid-cols-2 gap-2">
+              <Input
+                placeholder="NIF"
+                value={customerNif}
+                onChange={(e) => setCustomerNif(e.target.value)}
+              />
+              <Input
+                placeholder="Nome"
+                value={customerName}
+                onChange={(e) => setCustomerName(e.target.value)}
+              />
+            </div>
+          </div>
+
+          {/* Complete Button */}
+          <Button
+            className="w-full h-14 text-lg"
+            size="lg"
+            onClick={handleComplete}
+            disabled={!isValid}
+          >
+            <Check className="w-5 h-5 mr-2" />
+            Confirmar Pagamento
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}

@@ -1,0 +1,505 @@
+import { useState, useMemo } from 'react';
+import { useTranslation } from '@/i18n';
+import { useChartOfAccounts } from '@/hooks/useChartOfAccounts';
+import { Account, AccountType, AccountFormData, accountTypeLabels, getDefaultNature } from '@/types/accounting';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Badge } from '@/components/ui/badge';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { Label } from '@/components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Textarea } from '@/components/ui/textarea';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { toast } from 'sonner';
+import {
+  Plus, Search, Edit2, Trash2, RefreshCw,
+  FileText, Receipt, CreditCard, Banknote,
+  ChevronRight, ChevronDown, Printer, Download
+} from 'lucide-react';
+import { cn } from '@/lib/utils';
+
+// Category tabs
+const CATEGORY_TABS = [
+  { key: 'clientes', label: 'Clientes', filter: (a: Account) => a.code.startsWith('3.1') || a.code.startsWith('31') },
+  { key: 'fornecedores', label: 'Fornecedores', filter: (a: Account) => a.code.startsWith('3.2') || a.code.startsWith('32') },
+  { key: 'caixa', label: 'Caixa', filter: (a: Account) => a.code.startsWith('4.1') || a.code.startsWith('41') },
+  { key: 'bancos', label: 'Bancos', filter: (a: Account) => a.code.startsWith('4.2') || a.code.startsWith('42') },
+  { key: 'ativos', label: 'Ativos', filter: (a: Account) => a.account_type === 'asset' },
+  { key: 'recebimentos', label: 'Recebimentos', filter: (a: Account) => a.account_type === 'revenue' },
+  { key: 'custos', label: 'Custos', filter: (a: Account) => a.account_type === 'expense' },
+  { key: 'funcionarios', label: 'Funcionários', filter: (a: Account) => a.code.startsWith('6.3') || a.code.startsWith('63') || a.code.startsWith('3.4') || a.code.startsWith('34') },
+  { key: 'capital', label: 'Capital', filter: (a: Account) => a.account_type === 'equity' },
+  { key: 'todos', label: 'Todos', filter: () => true },
+] as const;
+
+const ROOT_ACCOUNT_VALUE = '__root__';
+
+const TAB_ACCOUNT_DEFAULTS: Record<string, { accountType: AccountType; preferredParentCodes: string[] }> = {
+  clientes: { accountType: 'asset', preferredParentCodes: ['3.1', '3'] },
+  fornecedores: { accountType: 'liability', preferredParentCodes: ['3.2', '3'] },
+  caixa: { accountType: 'asset', preferredParentCodes: ['4.1', '4'] },
+  bancos: { accountType: 'asset', preferredParentCodes: ['4.2', '4'] },
+  ativos: { accountType: 'asset', preferredParentCodes: ['1', '2'] },
+  recebimentos: { accountType: 'revenue', preferredParentCodes: ['7.1', '7'] },
+  custos: { accountType: 'expense', preferredParentCodes: ['6.1', '6'] },
+  funcionarios: { accountType: 'expense', preferredParentCodes: ['6.3', '3.4'] },
+  capital: { accountType: 'equity', preferredParentCodes: ['5'] },
+};
+
+const buildSuggestedChildCode = (parentCode: string, siblingCodes: string[]) => {
+  const prefix = `${parentCode}.`;
+  const nextIndex = siblingCodes.reduce((max, code) => {
+    if (!code.startsWith(prefix)) return max;
+    const firstSegment = code.slice(prefix.length).split('.')[0];
+    const parsed = Number(firstSegment);
+    return Number.isFinite(parsed) ? Math.max(max, parsed) : max;
+  }, 0) + 1;
+  return `${parentCode}.${nextIndex}`;
+};
+
+export default function ChartOfAccounts() {
+  const { t } = useTranslation();
+  const { accounts, isLoading, refetch, createAccount, updateAccount, deleteAccount } = useChartOfAccounts();
+
+  const [activeTab, setActiveTab] = useState('todos');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+  const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [editingAccount, setEditingAccount] = useState<Account | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
+
+  const [formData, setFormData] = useState({
+    code: '',
+    name: '',
+    description: '',
+    account_type: 'asset' as AccountType,
+    account_nature: 'debit' as 'debit' | 'credit',
+    parent_id: '',
+    level: 1,
+    is_header: false,
+    opening_balance: 0
+  });
+
+  // Filter accounts by tab + search
+  const currentTabConfig = CATEGORY_TABS.find(t => t.key === activeTab) || CATEGORY_TABS[CATEGORY_TABS.length - 1];
+  
+  const filteredAccounts = useMemo(() => {
+    return accounts.filter(a => {
+      const matchesTab = currentTabConfig.filter(a);
+      const matchesSearch = !searchTerm || 
+        a.code.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        a.name.toLowerCase().includes(searchTerm.toLowerCase());
+      return matchesTab && matchesSearch;
+    });
+  }, [accounts, activeTab, searchTerm, currentTabConfig]);
+
+  const rootAccounts = filteredAccounts.filter(a => !a.parent_id || !filteredAccounts.find(p => p.id === a.parent_id));
+
+  // Summary totals
+  const totals = useMemo(() => {
+    return filteredAccounts.reduce((acc, a) => {
+      if (!a.is_header) {
+        const bal = Number(a.current_balance) || 0;
+        if (bal >= 0) acc.debit += bal;
+        else acc.credit += Math.abs(bal);
+        acc.balance += bal;
+      }
+      return acc;
+    }, { debit: 0, credit: 0, balance: 0 });
+  }, [filteredAccounts]);
+
+  const handleToggle = (id: string) => {
+    setExpandedIds(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
+  const expandAll = () => setExpandedIds(new Set(accounts.filter(a => a.is_header).map(a => a.id)));
+  const collapseAll = () => setExpandedIds(new Set());
+
+  const openCreateDialog = () => {
+    setEditingAccount(null);
+
+    const emptyForm = {
+      code: '',
+      name: '',
+      description: '',
+      account_type: 'asset' as AccountType,
+      account_nature: 'debit' as 'debit' | 'credit',
+      parent_id: '',
+      level: 1,
+      is_header: false,
+      opening_balance: 0,
+    };
+
+    let nextForm = { ...emptyForm };
+
+    const applyParentDefaults = (parent: Account) => {
+      const children = accounts.filter(a => a.parent_id === parent.id && a.is_active !== false);
+      nextForm = {
+        ...nextForm,
+        parent_id: parent.id,
+        level: parent.level + 1,
+        code: buildSuggestedChildCode(parent.code, children.map(c => c.code)),
+        account_type: parent.account_type,
+        account_nature: parent.account_nature,
+      };
+    };
+
+    const selectedMatchesCurrentTab = selectedAccount ? currentTabConfig.filter(selectedAccount) : false;
+
+    if (selectedAccount && selectedMatchesCurrentTab) {
+      applyParentDefaults(selectedAccount);
+    } else {
+      const tabDefault = TAB_ACCOUNT_DEFAULTS[activeTab];
+      if (tabDefault) {
+        nextForm = {
+          ...nextForm,
+          account_type: tabDefault.accountType,
+          account_nature: getDefaultNature(tabDefault.accountType),
+        };
+
+        const tabParent = tabDefault.preferredParentCodes
+          .map(code => accounts.find(a => a.code === code && a.is_active !== false))
+          .find(Boolean);
+
+        if (tabParent) {
+          applyParentDefaults(tabParent);
+        }
+      }
+    }
+
+    setFormData(nextForm);
+    setIsDialogOpen(true);
+  };
+
+  const openEditDialog = (account: Account) => {
+    setEditingAccount(account);
+    setFormData({
+      code: account.code,
+      name: account.name,
+      description: account.description || '',
+      account_type: account.account_type,
+      account_nature: account.account_nature,
+      parent_id: account.parent_id || '',
+      level: account.level,
+      is_header: account.is_header,
+      opening_balance: Number(account.opening_balance) || 0
+    });
+    setIsDialogOpen(true);
+  };
+
+  const handleDelete = async (account: Account) => {
+    if (!confirm(`Eliminar conta "${account.name}"?`)) return;
+    try {
+      await deleteAccount(account.id);
+      toast.success('Conta eliminada');
+    } catch (error: any) {
+      toast.error(error.message || 'Erro ao eliminar');
+    }
+  };
+
+  const handleSubmit = async () => {
+    if (!formData.code || !formData.name) {
+      toast.error('Código e Nome são obrigatórios');
+      return;
+    }
+    setIsSubmitting(true);
+    try {
+      if (editingAccount) {
+        await updateAccount(editingAccount.id, { ...formData, parent_id: formData.parent_id || null });
+        toast.success('Conta actualizada');
+      } else {
+        await createAccount({ ...formData, parent_id: formData.parent_id || null });
+        toast.success('Conta criada');
+      }
+      setIsDialogOpen(false);
+    } catch (error: any) {
+      toast.error(error.message || 'Erro ao guardar');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleTypeChange = (type: AccountType) => {
+    setFormData(prev => ({ ...prev, account_type: type, account_nature: getDefaultNature(type) }));
+  };
+
+  const selectedAccount = accounts.find(a => a.id === selectedAccountId);
+  const selectedAccountInCurrentTab = selectedAccount && currentTabConfig.filter(selectedAccount) ? selectedAccount : null;
+
+  return (
+    <div className="flex flex-col h-full bg-background">
+      {/* Action Toolbar */}
+      <div className="flex items-center gap-1 px-2 py-1 bg-muted/50 border-b flex-wrap">
+        <Button variant="outline" size="sm" className="h-7 text-xs gap-1" onClick={openCreateDialog}>
+          <Plus className="w-3 h-3" /> Nova Conta
+        </Button>
+        <Button variant="outline" size="sm" className="h-7 text-xs gap-1" disabled={!selectedAccountInCurrentTab} onClick={() => selectedAccountInCurrentTab && openEditDialog(selectedAccountInCurrentTab)}>
+          <Edit2 className="w-3 h-3" /> Editar
+        </Button>
+        <Button variant="outline" size="sm" className="h-7 text-xs gap-1 text-destructive" disabled={!selectedAccountInCurrentTab || selectedAccountInCurrentTab.is_header}
+          onClick={() => selectedAccountInCurrentTab && handleDelete(selectedAccountInCurrentTab)}>
+          <Trash2 className="w-3 h-3" /> Eliminar
+        </Button>
+        <div className="w-px h-5 bg-border mx-1" />
+        {/* Action buttons */}
+        <Button variant="outline" size="sm" className="h-7 text-xs gap-1 text-blue-600 border-blue-200 hover:bg-blue-50 dark:border-blue-800 dark:hover:bg-blue-950/30" disabled={!selectedAccount}>
+          <FileText className="w-3 h-3" /> Fatura De Venda
+        </Button>
+        <Button variant="outline" size="sm" className="h-7 text-xs gap-1 text-green-600 border-green-200 hover:bg-green-50 dark:border-green-800 dark:hover:bg-green-950/30" disabled={!selectedAccount}>
+          <Receipt className="w-3 h-3" /> Recibo
+        </Button>
+        <Button variant="outline" size="sm" className="h-7 text-xs gap-1 text-orange-600 border-orange-200 hover:bg-orange-50 dark:border-orange-800 dark:hover:bg-orange-950/30" disabled={!selectedAccount}>
+          <Banknote className="w-3 h-3" /> Pagamento
+        </Button>
+        <Button variant="outline" size="sm" className="h-7 text-xs gap-1 text-purple-600 border-purple-200 hover:bg-purple-50 dark:border-purple-800 dark:hover:bg-purple-950/30" disabled={!selectedAccount}>
+          <CreditCard className="w-3 h-3" /> Nota De Crédito
+        </Button>
+        <div className="w-px h-5 bg-border mx-1" />
+        <Button variant="outline" size="sm" className="h-7 text-xs gap-1" onClick={expandAll}>Expandir</Button>
+        <Button variant="outline" size="sm" className="h-7 text-xs gap-1" onClick={collapseAll}>Recolher</Button>
+        <Button variant="outline" size="icon" className="h-7 w-7" onClick={refetch}><RefreshCw className="w-3 h-3" /></Button>
+        <div className="flex-1" />
+        <div className="relative">
+          <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-muted-foreground" />
+          <Input placeholder="Pesquisar conta..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="h-7 text-xs pl-7 w-48" />
+        </div>
+      </div>
+
+      {/* Category Tabs */}
+      <Tabs value={activeTab} onValueChange={(value) => {
+        setActiveTab(value);
+        setSelectedAccountId(null);
+      }}>
+        <TabsList className="w-full justify-start rounded-none border-b bg-muted/30 h-auto p-0 overflow-x-auto">
+          {CATEGORY_TABS.map(tab => (
+            <TabsTrigger key={tab.key} value={tab.key}
+              className="text-xs rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-primary/10 px-4 py-1.5">
+              {tab.label}
+            </TabsTrigger>
+          ))}
+        </TabsList>
+      </Tabs>
+
+      {/* Data Grid */}
+      <div className="flex-1 overflow-auto">
+        {isLoading ? (
+          <div className="flex items-center justify-center py-12">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
+          </div>
+        ) : (
+          <table className="w-full text-xs">
+            <thead className="bg-muted/60 border-b sticky top-0 z-10">
+              <tr>
+                <th className="px-3 py-2 text-left font-semibold w-32">Nº de Conta</th>
+                <th className="px-3 py-2 text-left font-semibold">Nome</th>
+                <th className="px-3 py-2 text-center font-semibold w-16">Moeda</th>
+                <th className="px-3 py-2 text-right font-semibold w-28">Débito</th>
+                <th className="px-3 py-2 text-right font-semibold w-28">Crédito</th>
+                <th className="px-3 py-2 text-right font-semibold w-28">Balanço</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border/50">
+              {rootAccounts.map(account => (
+                <AccountTreeRow
+                  key={account.id}
+                  account={account}
+                  level={0}
+                  expandedIds={expandedIds}
+                  onToggle={handleToggle}
+                  onSelect={setSelectedAccountId}
+                  onDoubleClick={openEditDialog}
+                  selectedId={selectedAccountId}
+                  allAccounts={filteredAccounts}
+                />
+              ))}
+            </tbody>
+            {/* Totals footer */}
+            <tfoot className="bg-muted/80 border-t-2 border-primary/30">
+              <tr className="font-bold text-xs">
+                <td className="px-3 py-2" colSpan={3}>TOTAL ({filteredAccounts.filter(a => !a.is_header).length} contas)</td>
+                <td className="px-3 py-2 text-right font-mono text-green-600">{totals.debit.toLocaleString('pt-AO')} Kz</td>
+                <td className="px-3 py-2 text-right font-mono text-red-600">{totals.credit.toLocaleString('pt-AO')} Kz</td>
+                <td className="px-3 py-2 text-right font-mono">{totals.balance.toLocaleString('pt-AO')} Kz</td>
+              </tr>
+            </tfoot>
+          </table>
+        )}
+        {!isLoading && rootAccounts.length === 0 && (
+          <div className="text-center py-12 text-muted-foreground text-sm">Nenhuma conta encontrada</div>
+        )}
+      </div>
+
+      {/* Selected account info bar */}
+      {selectedAccount && (
+        <div className="h-6 bg-primary/10 border-t flex items-center px-3 text-[10px] gap-4">
+          <span className="font-bold">{selectedAccount.code} - {selectedAccount.name}</span>
+          <span>Tipo: {accountTypeLabels[selectedAccount.account_type].pt}</span>
+          <span>Saldo: {Number(selectedAccount.current_balance).toLocaleString('pt-AO')} Kz</span>
+        </div>
+      )}
+
+      {/* Create/Edit Dialog */}
+      <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{editingAccount ? 'Editar Conta' : 'Nova Conta'}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Código *</Label>
+                <Input value={formData.code} onChange={e => setFormData(prev => ({ ...prev, code: e.target.value }))} placeholder="ex: 4.1.1" />
+              </div>
+              <div className="space-y-2">
+                <Label>Tipo *</Label>
+                <Select value={formData.account_type} onValueChange={v => handleTypeChange(v as AccountType)}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="asset">Activo</SelectItem>
+                    <SelectItem value="liability">Passivo</SelectItem>
+                    <SelectItem value="equity">Capital Próprio</SelectItem>
+                    <SelectItem value="revenue">Receitas</SelectItem>
+                    <SelectItem value="expense">Gastos</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label>Nome *</Label>
+              <Input value={formData.name} onChange={e => setFormData(prev => ({ ...prev, name: e.target.value }))} placeholder="ex: Caixa Principal" />
+            </div>
+            <div className="space-y-2">
+              <Label>Descrição</Label>
+              <Textarea value={formData.description} onChange={e => setFormData(prev => ({ ...prev, description: e.target.value }))} rows={2} />
+            </div>
+            <div className="space-y-2">
+              <Label>Conta Pai</Label>
+              <Select value={formData.parent_id || ROOT_ACCOUNT_VALUE} onValueChange={v => {
+                const parentId = v === ROOT_ACCOUNT_VALUE ? '' : v;
+                const parent = accounts.find(a => a.id === parentId);
+                setFormData(prev => ({
+                  ...prev,
+                  parent_id: parentId,
+                  level: parent ? parent.level + 1 : 1,
+                  account_type: parent ? parent.account_type : prev.account_type,
+                  account_nature: parent ? parent.account_nature : prev.account_nature,
+                }));
+              }}>
+                <SelectTrigger><SelectValue placeholder="Nenhuma (Conta raiz)" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={ROOT_ACCOUNT_VALUE}>Nenhuma (Conta raiz)</SelectItem>
+                  {accounts
+                    .filter(a => a.is_active !== false && (!editingAccount || a.id !== editingAccount.id))
+                    .sort((a, b) => a.code.localeCompare(b.code))
+                    .map(a => (
+                      <SelectItem key={a.id} value={a.id}>
+                        <span className="font-mono text-muted-foreground mr-2">{a.code}</span>
+                        {a.name}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Saldo Inicial</Label>
+                <Input type="number" value={formData.opening_balance} onChange={e => setFormData(prev => ({ ...prev, opening_balance: Number(e.target.value) }))} />
+              </div>
+              <div className="flex items-center gap-2 pt-8">
+                <Checkbox id="is_header" checked={formData.is_header} onCheckedChange={checked => setFormData(prev => ({ ...prev, is_header: !!checked }))} />
+                <Label htmlFor="is_header" className="text-sm">Conta Cabeçalho (grupo)</Label>
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsDialogOpen(false)}>Cancelar</Button>
+            <Button onClick={handleSubmit} disabled={isSubmitting}>{isSubmitting ? 'A guardar...' : 'Guardar'}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+// Tree row component
+interface AccountTreeRowProps {
+  account: Account;
+  level: number;
+  expandedIds: Set<string>;
+  onToggle: (id: string) => void;
+  onSelect: (id: string) => void;
+  onDoubleClick: (account: Account) => void;
+  selectedId: string | null;
+  allAccounts: Account[];
+}
+
+function AccountTreeRow({ account, level, expandedIds, onToggle, onSelect, onDoubleClick, selectedId, allAccounts }: AccountTreeRowProps) {
+  const isExpanded = expandedIds.has(account.id);
+  const children = allAccounts.filter(a => a.parent_id === account.id);
+  const hasChildren = children.length > 0;
+  const isSelected = selectedId === account.id;
+  
+  // For header/parent accounts: compute balance as sum of all descendants
+  const computeBalance = (acc: Account): number => {
+    const kids = allAccounts.filter(a => a.parent_id === acc.id);
+    if (kids.length === 0) return Number(acc.current_balance) || 0;
+    return kids.reduce((sum, kid) => sum + computeBalance(kid), 0);
+  };
+  
+  const balance = hasChildren || account.is_header ? computeBalance(account) : (Number(account.current_balance) || 0);
+
+  return (
+    <>
+      <tr
+        className={cn(
+          "cursor-pointer transition-colors hover:bg-accent/50",
+          isSelected && "bg-primary/15 hover:bg-primary/20",
+          account.is_header && "bg-muted/40 font-semibold"
+        )}
+        onClick={() => onSelect(account.id)}
+        onDoubleClick={() => onDoubleClick(account)}
+      >
+        <td className="px-3 py-1.5">
+          <div className="flex items-center gap-1" style={{ paddingLeft: `${level * 16}px` }}>
+            {hasChildren ? (
+              <button onClick={e => { e.stopPropagation(); onToggle(account.id); }} className="p-0.5 hover:bg-muted rounded">
+                {isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+              </button>
+            ) : <span className="w-4" />}
+            <span className="font-mono text-muted-foreground">{account.code}</span>
+          </div>
+        </td>
+        <td className="px-3 py-1.5">{account.name}</td>
+        <td className="px-3 py-1.5 text-center text-muted-foreground">AOA</td>
+        <td className="px-3 py-1.5 text-right font-mono">
+          {balance >= 0 ? `${balance.toLocaleString('pt-AO')}` : ''}
+        </td>
+        <td className="px-3 py-1.5 text-right font-mono">
+          {balance < 0 ? `${Math.abs(balance).toLocaleString('pt-AO')}` : ''}
+        </td>
+        <td className={cn("px-3 py-1.5 text-right font-mono font-medium", balance >= 0 ? "text-foreground" : "text-destructive")}>
+          {`${balance.toLocaleString('pt-AO')}`}
+        </td>
+      </tr>
+      {isExpanded && children.map(child => (
+        <AccountTreeRow
+          key={child.id}
+          account={child}
+          level={level + 1}
+          expandedIds={expandedIds}
+          onToggle={onToggle}
+          onSelect={onSelect}
+          onDoubleClick={onDoubleClick}
+          selectedId={selectedId}
+          allAccounts={allAccounts}
+        />
+      ))}
+    </>
+  );
+}

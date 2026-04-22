@@ -1,0 +1,474 @@
+import { useState, useMemo, useCallback } from 'react';
+import { format } from 'date-fns';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Badge } from '@/components/ui/badge';
+import { Textarea } from '@/components/ui/textarea';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Separator } from '@/components/ui/separator';
+import { 
+  ClipboardCheck, 
+  Search, 
+  AlertTriangle, 
+  CheckCircle2, 
+  ArrowUp, 
+  ArrowDown,
+  Save,
+  RotateCcw,
+  FileSpreadsheet,
+  Upload,
+  Calculator
+} from 'lucide-react';
+import { Product, Branch } from '@/types/erp';
+import { cn } from '@/lib/utils';
+import { useToast } from '@/hooks/use-toast';
+import * as XLSX from 'xlsx';
+
+// Adjustment reason codes
+const ADJUSTMENT_REASONS = [
+  { value: 'physical_count', label: 'Contagem Física' },
+  { value: 'damage', label: 'Dano/Avaria' },
+  { value: 'theft', label: 'Roubo/Furto' },
+  { value: 'expiry', label: 'Validade Expirada' },
+  { value: 'correction', label: 'Correcção de Erro' },
+  { value: 'transfer', label: 'Transferência Interna' },
+  { value: 'other', label: 'Outro' },
+];
+
+interface AdjustmentItem {
+  productId: string;
+  sku: string;
+  name: string;
+  category: string;
+  unit: string;
+  systemStock: number;
+  physicalCount: number | null;
+  difference: number;
+  isModified: boolean;
+}
+
+interface InventoryAdjustmentDialogProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  products: Product[];
+  branch: Branch | null;
+  onApplyAdjustments: (adjustments: { productId: string; newStock: number; difference: number }[], reason: string, notes: string) => void;
+}
+
+export function InventoryAdjustmentDialog({
+  open,
+  onOpenChange,
+  products,
+  branch,
+  onApplyAdjustments,
+}: InventoryAdjustmentDialogProps) {
+  const { toast } = useToast();
+  const [searchTerm, setSearchTerm] = useState('');
+  const [selectedCategory, setSelectedCategory] = useState<string>('all');
+  const [adjustmentReason, setAdjustmentReason] = useState('physical_count');
+  const [notes, setNotes] = useState('');
+  const [adjustments, setAdjustments] = useState<Map<string, number | null>>(new Map());
+  const [showOnlyDifferences, setShowOnlyDifferences] = useState(false);
+
+  // Get unique categories
+  const categories = useMemo(() => 
+    [...new Set(products.map(p => p.category).filter(Boolean))].sort(),
+    [products]
+  );
+
+  // Build adjustment items
+  const adjustmentItems: AdjustmentItem[] = useMemo(() => {
+    return products
+      .filter(p => {
+        if (selectedCategory !== 'all' && p.category !== selectedCategory) return false;
+        if (searchTerm) {
+          const term = searchTerm.toLowerCase();
+          return p.sku.toLowerCase().includes(term) || 
+                 p.name.toLowerCase().includes(term) ||
+                 p.barcode?.toLowerCase().includes(term);
+        }
+        return true;
+      })
+      .map(p => {
+        const physicalCount = adjustments.get(p.id);
+        const difference = physicalCount !== null && physicalCount !== undefined 
+          ? physicalCount - p.stock 
+          : 0;
+        return {
+          productId: p.id,
+          sku: p.sku,
+          name: p.name,
+          category: p.category,
+          unit: p.unit,
+          systemStock: p.stock,
+          physicalCount: physicalCount ?? null,
+          difference,
+          isModified: physicalCount !== null && physicalCount !== undefined,
+        };
+      })
+      .filter(item => !showOnlyDifferences || (item.isModified && item.difference !== 0))
+      .sort((a, b) => a.sku.localeCompare(b.sku));
+  }, [products, searchTerm, selectedCategory, adjustments, showOnlyDifferences]);
+
+  // Calculate summary
+  const summary = useMemo(() => {
+    const modified = adjustmentItems.filter(i => i.isModified);
+    const withDifference = modified.filter(i => i.difference !== 0);
+    const increases = withDifference.filter(i => i.difference > 0);
+    const decreases = withDifference.filter(i => i.difference < 0);
+    
+    return {
+      totalProducts: adjustmentItems.length,
+      modifiedCount: modified.length,
+      withDifferenceCount: withDifference.length,
+      increasesCount: increases.length,
+      decreasesCount: decreases.length,
+      totalIncrease: increases.reduce((sum, i) => sum + i.difference, 0),
+      totalDecrease: Math.abs(decreases.reduce((sum, i) => sum + i.difference, 0)),
+    };
+  }, [adjustmentItems]);
+
+  // Handle physical count change
+  const handlePhysicalCountChange = useCallback((productId: string, value: string) => {
+    setAdjustments(prev => {
+      const newMap = new Map(prev);
+      if (value === '' || value === null) {
+        newMap.delete(productId);
+      } else {
+        const numValue = parseInt(value, 10);
+        if (!isNaN(numValue) && numValue >= 0) {
+          newMap.set(productId, numValue);
+        }
+      }
+      return newMap;
+    });
+  }, []);
+
+  // Set physical count equal to system stock (no difference)
+  const handleSetAsSystem = useCallback((productId: string, systemStock: number) => {
+    setAdjustments(prev => {
+      const newMap = new Map(prev);
+      newMap.set(productId, systemStock);
+      return newMap;
+    });
+  }, []);
+
+  // Clear all adjustments
+  const handleClearAll = () => {
+    setAdjustments(new Map());
+    setNotes('');
+  };
+
+  // Apply adjustments
+  const handleApply = () => {
+    const itemsToAdjust = adjustmentItems
+      .filter(i => i.isModified && i.difference !== 0)
+      .map(i => ({
+        productId: i.productId,
+        newStock: i.physicalCount!,
+        difference: i.difference,
+      }));
+
+    if (itemsToAdjust.length === 0) {
+      toast({
+        title: 'Nenhum ajuste a aplicar',
+        description: 'Não existem diferenças entre o stock do sistema e a contagem física.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    const reasonLabel = ADJUSTMENT_REASONS.find(r => r.value === adjustmentReason)?.label || adjustmentReason;
+    
+    onApplyAdjustments(itemsToAdjust, reasonLabel, notes);
+    
+    toast({
+      title: 'Ajustes aplicados',
+      description: `${itemsToAdjust.length} produtos foram actualizados com sucesso.`,
+    });
+
+    handleClearAll();
+    onOpenChange(false);
+  };
+
+  // Import from Excel
+  const handleImportExcel = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const reader = new FileReader();
+      reader.onload = (evt) => {
+        const data = new Uint8Array(evt.target?.result as ArrayBuffer);
+        const workbook = XLSX.read(data, { type: 'array' });
+        const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+        const jsonData = XLSX.utils.sheet_to_json(firstSheet) as Record<string, unknown>[];
+
+        const newAdjustments = new Map<string, number>();
+        let matched = 0;
+
+        jsonData.forEach((row) => {
+          // Try to match by SKU
+          const sku = String(row['Código'] || row['codigo'] || row['SKU'] || row['sku'] || '').trim();
+          const count = parseInt(String(row['Contagem Física'] || row['contagem'] || row['Count'] || row['Física'] || 0), 10);
+
+          if (sku && !isNaN(count)) {
+            const product = products.find(p => p.sku.toLowerCase() === sku.toLowerCase());
+            if (product) {
+              newAdjustments.set(product.id, count);
+              matched++;
+            }
+          }
+        });
+
+        setAdjustments(newAdjustments);
+        toast({
+          title: 'Importação concluída',
+          description: `${matched} produtos correspondidos de ${jsonData.length} linhas.`,
+        });
+      };
+      reader.readAsArrayBuffer(file);
+    } catch (error) {
+      toast({
+        title: 'Erro na importação',
+        description: 'Não foi possível ler o ficheiro Excel.',
+        variant: 'destructive',
+      });
+    }
+
+    // Reset input
+    e.target.value = '';
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-5xl max-h-[90vh] overflow-hidden flex flex-col">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <ClipboardCheck className="w-5 h-5" />
+            Ajuste de Inventário - {branch?.name || 'Todas as Filiais'}
+          </DialogTitle>
+          <DialogDescription>
+            Introduza os valores da contagem física para calcular e aplicar as diferenças
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="flex-1 overflow-hidden flex flex-col gap-4">
+          {/* Toolbar */}
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="relative flex-1 min-w-[200px]">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+              <Input
+                placeholder="Pesquisar por código, nome ou código de barras..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="pl-10"
+              />
+            </div>
+            <Select value={selectedCategory} onValueChange={setSelectedCategory}>
+              <SelectTrigger className="w-[180px]">
+                <SelectValue placeholder="Categoria" />
+              </SelectTrigger>
+              <SelectContent className="bg-background border shadow-lg z-50">
+                <SelectItem value="all">Todas Categorias</SelectItem>
+                {categories.map(cat => (
+                  <SelectItem key={cat} value={cat}>{cat}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button
+              variant={showOnlyDifferences ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => setShowOnlyDifferences(!showOnlyDifferences)}
+            >
+              <AlertTriangle className="w-4 h-4 mr-1" />
+              Só Diferenças
+            </Button>
+            <label className="cursor-pointer">
+              <Button variant="outline" size="sm" asChild>
+                <span>
+                  <Upload className="w-4 h-4 mr-1" />
+                  Importar Excel
+                </span>
+              </Button>
+              <input
+                type="file"
+                accept=".xlsx,.xls,.csv"
+                onChange={handleImportExcel}
+                className="hidden"
+              />
+            </label>
+            <Button variant="ghost" size="sm" onClick={handleClearAll}>
+              <RotateCcw className="w-4 h-4 mr-1" />
+              Limpar
+            </Button>
+          </div>
+
+          {/* Summary Cards */}
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+            <div className="p-3 bg-muted rounded-lg text-center">
+              <p className="text-xs text-muted-foreground">Produtos</p>
+              <p className="text-lg font-bold">{summary.totalProducts}</p>
+            </div>
+            <div className="p-3 bg-muted rounded-lg text-center">
+              <p className="text-xs text-muted-foreground">Contados</p>
+              <p className="text-lg font-bold">{summary.modifiedCount}</p>
+            </div>
+            <div className="p-3 bg-muted rounded-lg text-center">
+              <p className="text-xs text-muted-foreground">Com Diferença</p>
+              <p className="text-lg font-bold text-amber-600">{summary.withDifferenceCount}</p>
+            </div>
+            <div className="p-3 bg-emerald-50 dark:bg-emerald-950/30 rounded-lg text-center">
+              <p className="text-xs text-muted-foreground">Aumentos</p>
+              <p className="text-lg font-bold text-emerald-600">+{summary.totalIncrease}</p>
+            </div>
+            <div className="p-3 bg-red-50 dark:bg-red-950/30 rounded-lg text-center">
+              <p className="text-xs text-muted-foreground">Reduções</p>
+              <p className="text-lg font-bold text-destructive">-{summary.totalDecrease}</p>
+            </div>
+          </div>
+
+          {/* Table */}
+          <ScrollArea className="flex-1 border rounded-lg">
+            <Table>
+              <TableHeader className="sticky top-0 bg-background z-10">
+                <TableRow>
+                  <TableHead className="w-[100px]">Código</TableHead>
+                  <TableHead>Produto</TableHead>
+                  <TableHead className="w-[100px]">Categoria</TableHead>
+                  <TableHead className="w-[60px] text-center">Un.</TableHead>
+                  <TableHead className="w-[100px] text-center">Stock Sistema</TableHead>
+                  <TableHead className="w-[120px] text-center">Contagem Física</TableHead>
+                  <TableHead className="w-[100px] text-center">Diferença</TableHead>
+                  <TableHead className="w-[80px]"></TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {adjustmentItems.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={8} className="text-center py-12 text-muted-foreground">
+                      <Calculator className="w-12 h-12 mx-auto mb-4 opacity-50" />
+                      <p>Nenhum produto encontrado</p>
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  adjustmentItems.map((item) => (
+                    <TableRow 
+                      key={item.productId}
+                      className={cn(
+                        item.isModified && item.difference !== 0 && 'bg-amber-50 dark:bg-amber-950/20',
+                        item.isModified && item.difference > 0 && 'bg-emerald-50 dark:bg-emerald-950/20',
+                        item.isModified && item.difference < 0 && 'bg-red-50 dark:bg-red-950/20'
+                      )}
+                    >
+                      <TableCell className="font-mono text-sm">{item.sku}</TableCell>
+                      <TableCell>
+                        <div className="max-w-[250px] truncate" title={item.name}>
+                          {item.name}
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-sm text-muted-foreground">{item.category}</TableCell>
+                      <TableCell className="text-center text-sm">{item.unit}</TableCell>
+                      <TableCell className="text-center font-medium">{item.systemStock}</TableCell>
+                      <TableCell>
+                        <Input
+                          type="number"
+                          min="0"
+                          value={item.physicalCount ?? ''}
+                          onChange={(e) => handlePhysicalCountChange(item.productId, e.target.value)}
+                          placeholder="—"
+                          className="h-8 text-center"
+                        />
+                      </TableCell>
+                      <TableCell className="text-center">
+                        {item.isModified ? (
+                          <Badge
+                            variant="outline"
+                            className={cn(
+                              'font-mono',
+                              item.difference > 0 && 'text-emerald-600 border-emerald-600',
+                              item.difference < 0 && 'text-destructive border-destructive',
+                              item.difference === 0 && 'text-muted-foreground'
+                            )}
+                          >
+                            {item.difference > 0 && <ArrowUp className="w-3 h-3 mr-1" />}
+                            {item.difference < 0 && <ArrowDown className="w-3 h-3 mr-1" />}
+                            {item.difference === 0 && <CheckCircle2 className="w-3 h-3 mr-1" />}
+                            {item.difference > 0 ? '+' : ''}{item.difference}
+                          </Badge>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 text-xs"
+                          onClick={() => handleSetAsSystem(item.productId, item.systemStock)}
+                          title="Definir contagem igual ao sistema"
+                        >
+                          <CheckCircle2 className="w-3 h-3" />
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          </ScrollArea>
+
+          {/* Adjustment Details */}
+          {summary.withDifferenceCount > 0 && (
+            <div className="space-y-3 p-4 border rounded-lg bg-muted/30">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Motivo do Ajuste</Label>
+                  <Select value={adjustmentReason} onValueChange={setAdjustmentReason}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent className="bg-background border shadow-lg z-50">
+                      {ADJUSTMENT_REASONS.map(reason => (
+                        <SelectItem key={reason.value} value={reason.value}>
+                          {reason.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Notas/Observações</Label>
+                  <Textarea
+                    placeholder="Observações adicionais sobre este ajuste..."
+                    value={notes}
+                    onChange={(e) => setNotes(e.target.value)}
+                    className="h-[60px] resize-none"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Cancelar
+          </Button>
+          <Button 
+            onClick={handleApply}
+            disabled={summary.withDifferenceCount === 0}
+          >
+            <Save className="w-4 h-4 mr-2" />
+            Aplicar {summary.withDifferenceCount} Ajustes
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
