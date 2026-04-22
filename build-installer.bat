@@ -1,127 +1,136 @@
 @echo off
+if /i not "%~1"=="__run__" (
+    start "NEXOR ERP Builder" cmd /k "\"%~f0\" __run__"
+    exit /b
+)
+
+setlocal EnableExtensions
+
 :: Always run from the folder where this script lives (project root)
 cd /d "%~dp0"
+
+set "LOG_FILE=%~dp0build-installer.log"
+break > "%LOG_FILE%"
 
 title NEXOR ERP - Build Installer
 color 0A
 
-echo.
-echo ========================================
-echo    NEXOR ERP - BUILD INSTALLER
-echo ========================================
-echo.
-
-echo [INFO] Running from: %cd%
-echo.
+call :log ""
+call :log "========================================"
+call :log "   NEXOR ERP - BUILD INSTALLER"
+call :log "========================================"
+call :log ""
+call :log "[INFO] Running from: %cd%"
+call :log "[INFO] Full log: %LOG_FILE%"
+call :log ""
 
 :: Check if Node.js is installed
 where node >nul 2>nul
-if %errorlevel% neq 0 (
-    echo [ERROR] Node.js is not installed!
-    echo Please download and install Node.js from https://nodejs.org
-    pause
-    exit /b 1
+if errorlevel 1 (
+    call :log "[ERROR] Node.js is not installed!"
+    call :log "Please download and install Node.js from https://nodejs.org"
+    goto :fail
 )
 
-echo [OK] Node.js found: 
+call :log "[OK] Node.js found:"
 node --version
-echo.
+node --version >> "%LOG_FILE%" 2>&1
+call :log ""
 
 :: Check if we're in the right directory
 if not exist "package.json" (
-    echo [ERROR] package.json not found!
-    echo Please run this script from the project root folder.
-    pause
-    exit /b 1
+    call :log "[ERROR] package.json not found!"
+    call :log "Please run this script from the project root folder."
+    goto :fail
 )
 
 :: Check for bundled PostgreSQL installer (warn only, do not block)
 if not exist "installer\postgres\postgresql-16-windows-x64.exe" (
-    echo.
-    echo [WARNING] Bundled PostgreSQL installer NOT FOUND.
-    echo           Expected: installer\postgres\postgresql-16-windows-x64.exe
-    echo.
-    echo           The installer will still build, but end users will
-    echo           need PostgreSQL 16 already installed on their PC.
-    echo.
-    echo           To bundle: download PostgreSQL 16 Windows x64 from
-    echo           https://www.enterprisedb.com/downloads/postgres-postgresql-downloads
-    echo           and place it at the path above.
-    echo.
-    echo [INFO] Continuing without bundled PostgreSQL installer...
+    call :log "[WARNING] Bundled PostgreSQL installer NOT FOUND."
+    call :log "          Expected: installer\postgres\postgresql-16-windows-x64.exe"
+    call :log "          Continuing without bundled PostgreSQL installer..."
 ) else (
-    echo [OK] Bundled PostgreSQL installer found.
+    call :log "[OK] Bundled PostgreSQL installer found."
 )
-echo.
+call :log ""
 
-echo [1/5] Verifying app dependencies...
+call :log "[1/5] Verifying app dependencies..."
 if exist "node_modules\.bin\vite.cmd" (
-    echo [OK] App dependencies already installed.
+    call :log "[OK] App dependencies already installed."
 ) else (
-    echo [INFO] Installing app dependencies (first time only)...
     if exist "package-lock.json" (
-        call npm ci --no-audit --no-fund --loglevel=error
+        call :run "Installing app dependencies with npm ci" npm ci --no-audit --no-fund --loglevel=error
     ) else (
-        call npm install --no-audit --no-fund --loglevel=error
+        call :run "Installing app dependencies with npm install" npm install --no-audit --no-fund --loglevel=error
     )
-    if %errorlevel% neq 0 (
-        echo [ERROR] Failed to install app dependencies
-        pause
-        exit /b 1
+    if errorlevel 1 (
+        call :log "[ERROR] Failed to install app dependencies."
+        goto :fail
     )
 )
+call :log ""
 
-echo.
-echo [2/5] Verifying Electron build tools...
+call :log "[2/5] Verifying Electron build tools..."
 if exist "node_modules\.bin\electron-builder.cmd" (
     if exist "node_modules\electron\dist\electron.exe" (
-        echo [OK] Electron build tools already installed.
-        goto :step3
+        call :log "[OK] Electron build tools already installed."
+    ) else (
+        call :run "Installing Electron build tools" npm install --no-save --no-package-lock --no-audit --no-fund --loglevel=error electron electron-builder electron-squirrel-startup
+        if errorlevel 1 (
+            call :log "[ERROR] Failed to install Electron build tools."
+            goto :fail
+        )
+    )
+) else (
+    call :run "Installing Electron build tools" npm install --no-save --no-package-lock --no-audit --no-fund --loglevel=error electron electron-builder electron-squirrel-startup
+    if errorlevel 1 (
+        call :log "[ERROR] Failed to install Electron build tools."
+        goto :fail
     )
 )
+call :log ""
 
-echo [INFO] Installing Electron build tools (first time only)...
-call npm install --no-save --no-package-lock --no-audit --no-fund --loglevel=error electron electron-builder electron-squirrel-startup
-if %errorlevel% neq 0 (
-    echo [ERROR] Failed to install Electron build tools
-    pause
-    exit /b 1
+call :run "[3/5] Building web application" npm run build
+if errorlevel 1 (
+    call :log "[ERROR] Failed to build web app."
+    goto :fail
 )
+call :log ""
 
-:step3
-
-echo.
-echo [3/5] Building web application...
-call npm run build
-if %errorlevel% neq 0 (
-    echo [ERROR] Failed to build web app
-    pause
-    exit /b 1
+call :run "[4/5] Building Windows installer" npx electron-builder --win
+if errorlevel 1 (
+    call :log "[ERROR] Failed to build installer."
+    goto :fail
 )
+call :log ""
 
-echo.
-echo [4/5] Building Windows installer...
-call npx electron-builder --win
-if %errorlevel% neq 0 (
-    echo [ERROR] Failed to build installer
-    pause
-    exit /b 1
-)
-
-echo.
-echo ========================================
-echo    BUILD COMPLETE!
-echo ========================================
-echo.
-echo Your installers are in the "release" folder:
-echo.
+call :log "========================================"
+call :log "   BUILD COMPLETE!"
+call :log "========================================"
+call :log ""
+call :log "Your installers are in the release folder:"
 dir /b release\*.exe 2>nul
-echo.
-echo - .exe installer: Double-click to install
-echo - Portable .exe: Run directly, no install needed
-echo.
+dir /b release\*.exe >> "%LOG_FILE%" 2>&1
+call :log ""
 
-:: Open release folder
 start "" "release"
-
 pause
+exit /b 0
+
+:run
+call :log "%~1"
+shift
+>> "%LOG_FILE%" echo.
+>> "%LOG_FILE%" echo ==== %DATE% %TIME% - %~1 ====
+call %* >> "%LOG_FILE%" 2>&1
+exit /b %errorlevel%
+
+:log
+echo %~1
+>> "%LOG_FILE%" echo %~1
+exit /b 0
+
+:fail
+call :log "[INFO] Build stopped. Read build-installer.log for the exact error."
+pause
+exit /b 1
