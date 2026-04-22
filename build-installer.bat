@@ -75,18 +75,14 @@ if exist "node_modules\.bin\electron-builder.cmd" (
     if exist "node_modules\electron\dist\electron.exe" (
         call :log "[OK] Electron build tools already installed."
     ) else (
-        call :run "Installing Electron build tools" npm install --no-save --no-package-lock --no-audit --no-fund --loglevel=error electron electron-builder electron-squirrel-startup
-        if errorlevel 1 (
-            call :log "[ERROR] Failed to install Electron build tools."
-            goto :fail
-        )
-    )
-) else (
-    call :run "Installing Electron build tools" npm install --no-save --no-package-lock --no-audit --no-fund --loglevel=error electron electron-builder electron-squirrel-startup
-    if errorlevel 1 (
-        call :log "[ERROR] Failed to install Electron build tools."
+        call :log "[ERROR] Electron is missing from node_modules."
+        call :log "        Run build-installer.bat again after step [1/5] completes successfully."
         goto :fail
     )
+) else (
+    call :log "[ERROR] electron-builder is missing from node_modules."
+    call :log "        Run npm install in the project root, then rerun build-installer.bat."
+    goto :fail
 )
 call :log ""
 
@@ -126,8 +122,13 @@ call %* >> "%LOG_FILE%" 2>&1
 exit /b %errorlevel%
 
 :log
-echo %~1
->> "%LOG_FILE%" echo %~1
+if "%~1"=="" (
+    echo(
+    >> "%LOG_FILE%" echo(
+) else (
+    echo %~1
+    >> "%LOG_FILE%" echo %~1
+)
 exit /b 0
 
 :fail
