@@ -183,6 +183,8 @@ const exchangeRateRoutes = require('./routes/exchangeRates');
 const saftXmlRoutes = require('./routes/saftXml');
 const transactionRoutes = require('./routes/transactions');
 const backupRoutes = require('./routes/backup');
+const purchaseInvoiceRoutes = require('./routes/purchaseInvoices');
+const erpDocumentRoutes = require('./routes/erpDocuments');
 
 // Use routes
 app.use('/api/auth', authRoutes);
@@ -209,6 +211,8 @@ app.use('/api/exchange-rates', exchangeRateRoutes(broadcastTable));
 app.use('/api/saft-xml', saftXmlRoutes(broadcastTable));
 app.use('/api/transactions', transactionRoutes(broadcastTable));
 app.use('/api/backup', backupRoutes(broadcastTable));
+app.use('/api/purchase-invoices', purchaseInvoiceRoutes(broadcastTable));
+app.use('/api/erp-documents', erpDocumentRoutes(broadcastTable));
 
 // Health check with extended info + DB connectivity
 app.get('/api/health', async (req, res) => {
