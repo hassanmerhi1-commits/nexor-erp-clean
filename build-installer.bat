@@ -77,19 +77,33 @@ if "%NEEDS_FULL_INSTALL%"=="0" (
 call :log ""
 
 call :log "[2/5] Verifying Electron build tools..."
-if exist "node_modules\.bin\electron-builder.cmd" (
-    if exist "node_modules\electron\dist\electron.exe" (
-        call :log "[OK] Electron build tools already installed."
-    ) else (
-        call :log "[ERROR] Electron is missing from node_modules."
-        call :log "        Run build-installer.bat again after step [1/5] completes successfully."
-        goto :fail
-    )
+if not exist "node_modules\.bin\electron-builder.cmd" goto :repair_electron_tools
+if not exist "node_modules\electron\dist\electron.exe" goto :repair_electron_tools
+call :log "[OK] Electron build tools already installed."
+goto :electron_tools_ready
+
+:repair_electron_tools
+call :log "[WARNING] Electron build tools are incomplete. Repairing dependencies automatically..."
+if exist "package-lock.json" (
+    call :run "Repairing Electron dependencies with npm ci" npm ci --no-audit --no-fund --loglevel=error
 ) else (
-    call :log "[ERROR] electron-builder is missing from node_modules."
-    call :log "        Run npm install in the project root, then rerun build-installer.bat."
+    call :run "Repairing Electron dependencies with npm install" npm install --no-audit --no-fund --loglevel=error
+)
+if errorlevel 1 (
+    call :log "[ERROR] Failed while repairing Electron dependencies."
     goto :fail
 )
+if not exist "node_modules\.bin\electron-builder.cmd" (
+    call :log "[ERROR] electron-builder is still missing after repair."
+    goto :fail
+)
+if not exist "node_modules\electron\dist\electron.exe" (
+    call :log "[ERROR] Electron runtime is still missing after repair."
+    goto :fail
+)
+call :log "[OK] Electron build tools repaired successfully."
+
+:electron_tools_ready
 call :log ""
 
 call :run "[3/5] Building web application" npm run build
