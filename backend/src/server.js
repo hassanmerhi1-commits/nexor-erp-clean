@@ -185,6 +185,11 @@ const transactionRoutes = require('./routes/transactions');
 const backupRoutes = require('./routes/backup');
 const purchaseInvoiceRoutes = require('./routes/purchaseInvoices');
 const erpDocumentRoutes = require('./routes/erpDocuments');
+const companyFileRoutes = require('./routes/companyFile');
+const { readOnlyGuard } = require('./middleware/readOnlyMode');
+
+// Read-only guard MUST come before any mutating routes
+app.use(readOnlyGuard);
 
 // Use routes
 app.use('/api/auth', authRoutes);
@@ -213,6 +218,7 @@ app.use('/api/transactions', transactionRoutes(broadcastTable));
 app.use('/api/backup', backupRoutes(broadcastTable));
 app.use('/api/purchase-invoices', purchaseInvoiceRoutes(broadcastTable));
 app.use('/api/erp-documents', erpDocumentRoutes(broadcastTable));
+app.use('/api/company-file', companyFileRoutes());
 
 // Health check with extended info + DB connectivity
 app.get('/api/health', async (req, res) => {
