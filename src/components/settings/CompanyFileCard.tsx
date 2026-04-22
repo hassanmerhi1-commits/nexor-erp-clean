@@ -154,7 +154,7 @@ export function CompanyFileCard() {
               </CardDescription>
             </div>
             {info?.readOnlyMode && (
-              <Badge variant="outline" className="border-yellow-500/60 text-yellow-700">
+              <Badge variant="outline" className="border-warning/60 text-warning">
                 <ShieldAlert className="h-3 w-3 mr-1" />
                 Read-Only Snapshot
               </Badge>
