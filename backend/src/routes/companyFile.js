@@ -22,6 +22,7 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const { execFile } = require('child_process');
+const traveler = require('../traveler');
 
 module.exports = function companyFileRoutes() {
   const router = express.Router();
@@ -92,6 +93,7 @@ module.exports = function companyFileRoutes() {
       readOnlyMode: process.env.NEXOR_READ_ONLY === '1',
       activeSnapshot: process.env.NEXOR_ACTIVE_SNAPSHOT || null,
       database: getPgEnv().PGDATABASE,
+      traveler: traveler.getStatus(),
     });
   });
 
