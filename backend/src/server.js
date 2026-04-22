@@ -187,6 +187,7 @@ const purchaseInvoiceRoutes = require('./routes/purchaseInvoices');
 const erpDocumentRoutes = require('./routes/erpDocuments');
 const companyFileRoutes = require('./routes/companyFile');
 const { readOnlyGuard } = require('./middleware/readOnlyMode');
+const branchSyncRoutes = require('./routes/branchSync');
 
 // Read-only guard MUST come before any mutating routes
 app.use(readOnlyGuard);
@@ -219,6 +220,7 @@ app.use('/api/backup', backupRoutes(broadcastTable));
 app.use('/api/purchase-invoices', purchaseInvoiceRoutes(broadcastTable));
 app.use('/api/erp-documents', erpDocumentRoutes(broadcastTable));
 app.use('/api/company-file', companyFileRoutes());
+app.use('/api/branch-sync', branchSyncRoutes(broadcastTable));
 
 // Health check with extended info + DB connectivity
 app.get('/api/health', async (req, res) => {
