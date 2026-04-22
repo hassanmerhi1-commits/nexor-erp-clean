@@ -188,6 +188,8 @@ const erpDocumentRoutes = require('./routes/erpDocuments');
 const companyFileRoutes = require('./routes/companyFile');
 const { readOnlyGuard } = require('./middleware/readOnlyMode');
 const branchSyncRoutes = require('./routes/branchSync');
+const autoBackupRoutes = require('./routes/autoBackup');
+const autoBackup = require('./autoBackup');
 
 // Read-only guard MUST come before any mutating routes
 app.use(readOnlyGuard);
@@ -221,6 +223,7 @@ app.use('/api/purchase-invoices', purchaseInvoiceRoutes(broadcastTable));
 app.use('/api/erp-documents', erpDocumentRoutes(broadcastTable));
 app.use('/api/company-file', companyFileRoutes());
 app.use('/api/branch-sync', branchSyncRoutes(broadcastTable));
+app.use('/api/auto-backup', autoBackupRoutes());
 
 // Health check with extended info + DB connectivity
 app.get('/api/health', async (req, res) => {
@@ -310,6 +313,13 @@ server.listen(PORT, '0.0.0.0', async () => {
     await discoveryBroadcaster.start();
   } catch (error) {
     console.error('[Discovery] Failed to start broadcaster:', error.message);
+  }
+
+  // Phase 4: arm the auto-backup safety net
+  try {
+    autoBackup.start();
+  } catch (error) {
+    console.error('[AUTO-BACKUP] Failed to start scheduler:', error.message);
   }
 
   // Backfill missing Caixa sub-accounts for existing branches
