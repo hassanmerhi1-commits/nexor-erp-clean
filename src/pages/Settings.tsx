@@ -27,6 +27,7 @@ import { NetworkSettingsCard } from '@/components/settings/NetworkSettingsCard';
 import { HotUpdateSettingsCard } from '@/components/settings/HotUpdateSettingsCard';
 import { CompanyFileCard } from '@/components/settings/CompanyFileCard';
 import { BranchSyncCard } from '@/components/settings/BranchSyncCard';
+import { AutoBackupCard } from '@/components/settings/AutoBackupCard';
 import { toast } from 'sonner';
 import { downloadBackup, parseBackupFile, restoreBackup, getStorageStats } from '@/lib/backup';
 import type { UpdateStatus, SetupConfig } from '@/types/electron';
@@ -358,6 +359,9 @@ export default function Settings() {
 
         {/* Branch Sync — Push/Receive end-of-day sales */}
         <BranchSyncCard />
+
+        {/* Phase 4: Daily auto-backup safety net */}
+        <AutoBackupCard />
 
         {/* Setup Configuration Card */}
         <Card>
