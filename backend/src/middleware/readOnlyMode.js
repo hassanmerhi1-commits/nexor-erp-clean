@@ -20,6 +20,11 @@ const ALLOWED_PATHS = [
   /^\/api\/auth\/login$/,
   /^\/api\/auth\/logout$/,
   /^\/api\/health/,
+  // Traveler mode toggle paths must work even when read-only is active,
+  // otherwise the user can never unmount the snapshot.
+  /^\/api\/company-file\/unmount-readonly/,
+  /^\/api\/company-file\/mount-readonly/,
+  /^\/api\/company-file\/readonly-status/,
 ];
 
 function readOnlyGuard(req, res, next) {
