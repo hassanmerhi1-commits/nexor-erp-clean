@@ -48,28 +48,47 @@ if not exist "installer\postgres\postgresql-16-windows-x64.exe" (
     echo           https://www.enterprisedb.com/downloads/postgres-postgresql-downloads
     echo           and place it at the path above.
     echo.
-    pause
+    echo [INFO] Continuing without bundled PostgreSQL installer...
 ) else (
     echo [OK] Bundled PostgreSQL installer found.
 )
 echo.
 
-echo [1/5] Installing dependencies...
-call npm install
+echo [1/5] Verifying app dependencies...
+if exist "node_modules\.bin\vite.cmd" (
+    echo [OK] App dependencies already installed.
+) else (
+    echo [INFO] Installing app dependencies (first time only)...
+    if exist "package-lock.json" (
+        call npm ci --no-audit --no-fund --loglevel=error
+    ) else (
+        call npm install --no-audit --no-fund --loglevel=error
+    )
+    if %errorlevel% neq 0 (
+        echo [ERROR] Failed to install app dependencies
+        pause
+        exit /b 1
+    )
+)
+
+echo.
+echo [2/5] Verifying Electron build tools...
+if exist "node_modules\.bin\electron-builder.cmd" (
+    if exist "node_modules\electron\dist\electron.exe" (
+        echo [OK] Electron build tools already installed.
+        goto :step3
+    )
+)
+
+echo [INFO] Installing Electron build tools (first time only)...
+call npm install --no-save --no-package-lock --no-audit --no-fund --loglevel=error electron electron-builder electron-squirrel-startup
 if %errorlevel% neq 0 (
-    echo [ERROR] Failed to install dependencies
+    echo [ERROR] Failed to install Electron build tools
     pause
     exit /b 1
 )
 
-echo.
-echo [2/5] Installing Electron (dev dependencies)...
-call npm install --save-dev electron electron-builder electron-squirrel-startup
-if %errorlevel% neq 0 (
-    echo [ERROR] Failed to install Electron
-    pause
-    exit /b 1
-)
+:step3
 
 echo.
 echo [3/5] Building web application...
