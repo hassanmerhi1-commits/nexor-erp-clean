@@ -1,10 +1,25 @@
 // Document storage — DUAL-MODE: Electron → SQLite | Web → localStorage
 import { ERPDocument, DocumentType, DocumentStatus, DocumentLine, generateDocumentNumber, DOCUMENT_TYPE_CONFIG } from '@/types/documents';
 import { isElectronMode, dbGetAll, dbInsert, lsGet, lsSet } from '@/lib/dbHelper';
+import { api } from '@/lib/api/client';
+import { isDemoMode } from '@/lib/api/config';
 
 const STORAGE_KEY = 'kwanzaerp_documents';
 
 export async function getDocuments(type?: DocumentType, branchId?: string): Promise<ERPDocument[]> {
+  // 1) Backend API
+  if (!isDemoMode()) {
+    try {
+      const result = await api.erpDocuments.list({ branchId, type });
+      if (result.data && Array.isArray(result.data)) {
+        return result.data
+          .map(mapDocFromDb)
+          .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      }
+    } catch (e) {
+      console.warn('[Documents] API list failed, trying local fallback:', e);
+    }
+  }
   if (isElectronMode()) {
     const rows = await dbGetAll<any>('erp_documents');
     let docs = rows.map(mapDocFromDb);
@@ -19,6 +34,14 @@ export async function getDocuments(type?: DocumentType, branchId?: string): Prom
 }
 
 export async function getDocumentById(id: string): Promise<ERPDocument | undefined> {
+  if (!isDemoMode()) {
+    try {
+      const result = await api.erpDocuments.get(id);
+      if (result.data) return mapDocFromDb(result.data);
+    } catch (e) {
+      console.warn('[Documents] API get failed:', e);
+    }
+  }
   if (isElectronMode()) {
     const rows = await dbGetAll<any>('erp_documents');
     const row = rows.find((r: any) => r.id === id);
@@ -33,6 +56,15 @@ export async function getNextSequence(type: DocumentType, branchId: string): Pro
 }
 
 export async function saveDocument(doc: ERPDocument): Promise<ERPDocument> {
+  if (!isDemoMode()) {
+    try {
+      const result = await api.erpDocuments.save(mapDocToDb(doc));
+      if (result.data) return doc;
+      console.warn('[Documents] API save error:', result.error);
+    } catch (e) {
+      console.warn('[Documents] API save failed, trying local fallback:', e);
+    }
+  }
   if (isElectronMode()) {
     await dbInsert('erp_documents', mapDocToDb(doc));
     return doc;
