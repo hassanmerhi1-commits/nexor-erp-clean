@@ -63,6 +63,11 @@
     {
       "from": "electron/splash.html",
       "to": "splash.html"
+    },
+    {
+      "from": "installer/postgres",
+      "to": "postgres",
+      "filter": ["postgresql-*-windows-x64.exe"]
     }
   ],
   "publish": {
@@ -90,7 +95,10 @@
     "allowToChangeInstallationDirectory": true,
     "createDesktopShortcut": true,
     "createStartMenuShortcut": true,
-    "shortcutName": "Kwanza ERP"
+    "shortcutName": "Kwanza ERP",
+    "include": "installer/install-postgres.nsh",
+    "perMachine": true,
+    "deleteAppDataOnUninstall": false
   },
   "portable": {
     "artifactName": "KwanzaERP-Portable-${version}.${ext}"

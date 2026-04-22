@@ -1,6 +1,21 @@
-# Kwanza ERP - Desktop App Setup
+# NEXOR ERP — Desktop App Setup
 
-This guide shows you how to build and run Kwanza ERP as a standalone desktop application (.exe for Windows).
+This guide shows you how to build and run NEXOR ERP as a standalone desktop application (.exe for Windows).
+
+## Database engine — bundled, no Docker
+
+Starting with v1.0.32 the installer **bundles PostgreSQL 16** and
+installs it silently as a Windows service called **NEXOR_PostgreSQL**.
+
+- If PostgreSQL 16 is already installed on the target PC → reuse it.
+- If not → install silently from the bundled binary.
+- Docker is **no longer required** and is no longer mentioned by the
+  app. The legacy `docker-compose.yml` is kept only as a developer
+  fallback under `legacy/docker/`.
+
+Before running `build-installer.bat`, drop the official EnterpriseDB
+installer in `installer/postgres/postgresql-16-windows-x64.exe`.
+See `installer/postgres/README.md` for the download link.
 
 ## Prerequisites
 
@@ -104,3 +119,7 @@ Make sure you ran `npm run build` before `npm run electron:build`.
 
 ### App won't start
 Check if port 5173 is available for dev mode, or if dist/index.html exists for production.
+
+### "Database not connected" after install
+Open `services.msc`, find **NEXOR_PostgreSQL**, set startup type to
+Automatic, then click Start. Restart NEXOR ERP.

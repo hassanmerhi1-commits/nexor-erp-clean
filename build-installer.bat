@@ -2,12 +2,12 @@
 :: Always run from the folder where this script lives (project root)
 cd /d "%~dp0"
 
-title Kwanza ERP - Build Installer
+title NEXOR ERP - Build Installer
 color 0A
 
 echo.
 echo ========================================
-echo    KWANZA ERP - BUILD INSTALLER
+echo    NEXOR ERP - BUILD INSTALLER
 echo ========================================
 echo.
 
@@ -34,6 +34,25 @@ if not exist "package.json" (
     pause
     exit /b 1
 )
+
+:: Check for bundled PostgreSQL installer (warn only, do not block)
+if not exist "installer\postgres\postgresql-16-windows-x64.exe" (
+    echo.
+    echo [WARNING] Bundled PostgreSQL installer NOT FOUND.
+    echo           Expected: installer\postgres\postgresql-16-windows-x64.exe
+    echo.
+    echo           The installer will still build, but end users will
+    echo           need PostgreSQL 16 already installed on their PC.
+    echo.
+    echo           To bundle: download PostgreSQL 16 Windows x64 from
+    echo           https://www.enterprisedb.com/downloads/postgres-postgresql-downloads
+    echo           and place it at the path above.
+    echo.
+    pause
+) else (
+    echo [OK] Bundled PostgreSQL installer found.
+)
+echo.
 
 echo [1/5] Installing dependencies...
 call npm install

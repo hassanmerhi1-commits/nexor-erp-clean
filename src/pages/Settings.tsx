@@ -382,7 +382,7 @@ export default function Settings() {
                   <span className="text-sm text-muted-foreground">Database</span>
                   <span className="text-xs font-mono truncate max-w-[250px]">
                     {setupConfig.serverConfig.databasePath?.startsWith('postgresql') 
-                      ? 'PostgreSQL (Docker)' 
+                      ? 'PostgreSQL (nativo)' 
                       : setupConfig.serverConfig.databasePath || 'PostgreSQL (Default)'}
                   </span>
                 </div>

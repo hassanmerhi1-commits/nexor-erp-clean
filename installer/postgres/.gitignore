@@ -1,0 +1,3 @@
+# Do not commit the 330 MB PostgreSQL binary
+postgresql-*.exe
+*.exe
