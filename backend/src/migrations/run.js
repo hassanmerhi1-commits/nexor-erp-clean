@@ -21,6 +21,7 @@ const MIGRATIONS = [
   '013_document_sequences.sql',
   '014_chart_of_accounts_children_count.sql',
   '015_purchase_invoices_and_documents.sql',
+  '016_branch_sync.sql',
 ];
 
 /**
