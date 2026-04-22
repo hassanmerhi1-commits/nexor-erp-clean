@@ -1,6 +1,6 @@
 @echo off
 if /i not "%~1"=="__run__" (
-    start "NEXOR ERP Builder" cmd /k "\"%~f0\" __run__"
+    start "NEXOR ERP Builder" cmd /k ""%~f0" __run__"
     exit /b
 )
 
