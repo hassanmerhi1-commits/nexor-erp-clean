@@ -5,6 +5,7 @@
 import { Product } from '@/types/erp';
 import { api } from '@/lib/api/client';
 import { isElectronMode, dbGetAll, dbInsert, dbDelete as dbDeleteRow, lsGet, lsSet } from '@/lib/dbHelper';
+import { isDemoMode } from '@/lib/api/config';
 
 const STORAGE_KEY = 'kwanzaerp_purchase_invoices';
 
@@ -88,12 +89,27 @@ export interface PurchaseInvoice {
 // ---------- CRUD ----------
 
 export async function getPurchaseInvoices(branchId?: string): Promise<PurchaseInvoice[]> {
+  // 1) Backend API (PostgreSQL) — single source of truth on server / desktop
+  if (!isDemoMode()) {
+    try {
+      const result = await api.purchaseInvoices.list(branchId);
+      if (result.data && Array.isArray(result.data)) {
+        return result.data
+          .map(mapPIFromDb)
+          .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      }
+    } catch (e) {
+      console.warn('[PurchaseInvoices] API list failed, trying local fallback:', e);
+    }
+  }
+  // 2) Electron direct DB fallback
   if (isElectronMode()) {
     const rows = await dbGetAll<any>('purchase_invoices');
     let docs = rows.map(mapPIFromDb);
     if (branchId) docs = docs.filter(d => d.branchId === branchId);
     return docs.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }
+  // 3) Browser localStorage (demo / cloud preview only)
   let docs = lsGet<PurchaseInvoice[]>(STORAGE_KEY, []);
   if (branchId) docs = docs.filter(d => d.branchId === branchId);
   return docs.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
@@ -112,10 +128,22 @@ export function generatePurchaseInvoiceNumber(branchCode: string): string {
 }
 
 export async function savePurchaseInvoice(invoice: PurchaseInvoice): Promise<PurchaseInvoice> {
+  // 1) Backend API (PostgreSQL)
+  if (!isDemoMode()) {
+    try {
+      const result = await api.purchaseInvoices.save(mapPIToDb(invoice));
+      if (result.data) return invoice;
+      console.warn('[PurchaseInvoices] API save error:', result.error);
+    } catch (e) {
+      console.warn('[PurchaseInvoices] API save failed, trying local fallback:', e);
+    }
+  }
+  // 2) Electron direct DB fallback
   if (isElectronMode()) {
     await dbInsert('purchase_invoices', mapPIToDb(invoice));
     return invoice;
   }
+  // 3) localStorage fallback (demo)
   const all = lsGet<PurchaseInvoice[]>(STORAGE_KEY, []);
   const idx = all.findIndex(d => d.id === invoice.id);
   if (idx >= 0) {
@@ -128,6 +156,14 @@ export async function savePurchaseInvoice(invoice: PurchaseInvoice): Promise<Pur
 }
 
 export async function deletePurchaseInvoice(id: string): Promise<void> {
+  if (!isDemoMode()) {
+    try {
+      const result = await api.purchaseInvoices.delete(id);
+      if (result.data) return;
+    } catch (e) {
+      console.warn('[PurchaseInvoices] API delete failed, trying local fallback:', e);
+    }
+  }
   if (isElectronMode()) {
     await dbDeleteRow('purchase_invoices', id);
     return;

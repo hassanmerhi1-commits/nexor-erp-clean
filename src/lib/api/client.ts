@@ -655,6 +655,33 @@ export const api = {
     },
   },
 
+  // Purchase Invoices (Faturas de Compra) — single source of truth in PostgreSQL
+  purchaseInvoices: {
+    list: (branchId?: string) =>
+      apiFetch<any[]>(`/purchase-invoices${branchId ? `?branchId=${encodeURIComponent(branchId)}` : ''}`),
+    get: (id: string) => apiFetch<any>(`/purchase-invoices/${id}`),
+    save: (data: any) =>
+      apiFetch<any>('/purchase-invoices', { method: 'POST', body: JSON.stringify(data) }),
+    delete: (id: string) =>
+      apiFetch<any>(`/purchase-invoices/${id}`, { method: 'DELETE' }),
+  },
+
+  // ERP Documents (Proforma → Fatura → Recibo chain)
+  erpDocuments: {
+    list: (params: { branchId?: string; type?: string } = {}) => {
+      const qs = new URLSearchParams();
+      if (params.branchId) qs.set('branchId', params.branchId);
+      if (params.type) qs.set('type', params.type);
+      const tail = qs.toString();
+      return apiFetch<any[]>(`/erp-documents${tail ? `?${tail}` : ''}`);
+    },
+    get: (id: string) => apiFetch<any>(`/erp-documents/${id}`),
+    save: (data: any) =>
+      apiFetch<any>('/erp-documents', { method: 'POST', body: JSON.stringify(data) }),
+    delete: (id: string) =>
+      apiFetch<any>(`/erp-documents/${id}`, { method: 'DELETE' }),
+  },
+
   // Chart of Accounts
   chartOfAccounts: {
     list: () => {
