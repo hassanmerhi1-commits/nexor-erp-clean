@@ -25,6 +25,7 @@ import {
 import { CompanySettingsDialog } from '@/components/settings/CompanySettingsDialog';
 import { NetworkSettingsCard } from '@/components/settings/NetworkSettingsCard';
 import { HotUpdateSettingsCard } from '@/components/settings/HotUpdateSettingsCard';
+import { CompanyFileCard } from '@/components/settings/CompanyFileCard';
 import { toast } from 'sonner';
 import { downloadBackup, parseBackupFile, restoreBackup, getStorageStats } from '@/lib/backup';
 import type { UpdateStatus, SetupConfig } from '@/types/electron';
@@ -350,6 +351,9 @@ export default function Settings() {
             />
           </CardContent>
         </Card>
+
+        {/* Company File (.nexor) — the heart of the system */}
+        <CompanyFileCard />
 
         {/* Setup Configuration Card */}
         <Card>
