@@ -233,7 +233,7 @@ export function ServerConnectionIndicator() {
                 <div className="flex items-center justify-between text-xs">
                   <span className="flex items-center gap-1.5">
                     <Container className="w-3 h-3" />
-                    Docker → PostgreSQL
+                    PostgreSQL (nativo)
                   </span>
                   {health?.database?.connected ? (
                     <Badge variant="outline" className="text-[10px] border-emerald-500/50 text-emerald-600">
@@ -279,8 +279,8 @@ export function ServerConnectionIndicator() {
             {!isElectron && !backendReachable && (
               <div className="border-t pt-2 text-[11px] text-muted-foreground space-y-1">
                 <p className="font-medium text-destructive">Servidor não acessível</p>
-                <p>Verifique se o Docker Desktop está a correr e o container está ativo.</p>
-                <p className="font-mono text-[10px] bg-muted p-1 rounded">docker compose up -d</p>
+                <p>Verifique se o serviço NEXOR_PostgreSQL está em execução nos Serviços do Windows.</p>
+                <p className="font-mono text-[10px] bg-muted p-1 rounded">services.msc → NEXOR_PostgreSQL → Iniciar</p>
               </div>
             )}
 

@@ -227,7 +227,7 @@ export default function Setup() {
                     <Server className="h-5 w-5 text-primary" /> Configurar Servidor
                   </CardTitle>
                    <CardDescription>
-230:                     Configurar conexão PostgreSQL (Docker) para a base de dados
+                    Configurar conexão à base de dados PostgreSQL local
                    </CardDescription>
                 </div>
               </div>
@@ -246,7 +246,7 @@ export default function Setup() {
                   </Button>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Docker PostgreSQL será usado automaticamente
+                  PostgreSQL local (instalado pelo NEXOR ERP) será usado automaticamente
                 </p>
               </div>
 
@@ -339,7 +339,7 @@ export default function Setup() {
 
         {/* Info footer */}
         <div className="mt-6 text-center text-xs text-muted-foreground">
-          <p>Base de dados: PostgreSQL (Docker)</p>
+          <p>Base de dados: PostgreSQL nativo (NEXOR_PostgreSQL)</p>
           <p className="mt-1">Servidor = conexão PostgreSQL | Cliente = IP do servidor</p>
         </div>
       </div>

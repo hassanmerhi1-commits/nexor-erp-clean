@@ -1139,8 +1139,9 @@ ipcMain.handle('db:import', async (_, data, companyId) => {
 });
 
 ipcMain.handle('db:create', async () => {
-  // PostgreSQL databases are created via Docker/init.sql, not at runtime
-  return { success: true, message: 'PostgreSQL database managed by Docker' };
+  // PostgreSQL databases are created by the NSIS installer (NEXOR_PostgreSQL service)
+  // and the migration runner — not at runtime.
+  return { success: true, message: 'PostgreSQL database managed by NEXOR_PostgreSQL service' };
 });
 
 ipcMain.handle('db:testConnection', async () => {
