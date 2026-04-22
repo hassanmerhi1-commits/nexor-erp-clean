@@ -201,7 +201,7 @@ export function CompanyFileCard() {
 
         <CardContent className="space-y-6">
           {info?.readOnlyMode && (
-            <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 flex items-start justify-between gap-3">
+            <div className="rounded-lg border border-warning/40 bg-warning/10 p-3 flex items-start justify-between gap-3">
               <div className="text-sm">
                 <div className="font-medium flex items-center gap-1.5">
                   <Eye className="h-4 w-4" /> Traveler Mode active
