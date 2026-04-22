@@ -53,7 +53,7 @@ export function ReadOnlyBanner() {
 
   return (
     <div
-      className="sticky top-0 z-50 w-full border-b border-amber-500/40 bg-amber-500/15 backdrop-blur-sm text-amber-900 dark:text-amber-100"
+      className="sticky top-0 z-50 w-full border-b border-warning/40 bg-warning/15 backdrop-blur-sm text-foreground"
       role="status"
       aria-live="polite"
     >
@@ -61,7 +61,7 @@ export function ReadOnlyBanner() {
         <div className="flex min-w-0 items-center gap-2">
           <Eye className="h-4 w-4 shrink-0" />
           <span className="font-medium">Traveler Mode (Read-Only)</span>
-          <span className="hidden sm:inline text-amber-900/70 dark:text-amber-100/70 truncate">
+          <span className="hidden sm:inline text-muted-foreground truncate">
             · viewing snapshot{' '}
             <span className="font-mono">{status.filename}</span>
             {status.mountedAt && (
@@ -74,7 +74,7 @@ export function ReadOnlyBanner() {
           variant="outline"
           onClick={handleExit}
           disabled={exiting}
-          className="border-amber-500/60 bg-background/40 hover:bg-background/70"
+          className="border-warning/60 bg-background/40 hover:bg-background/70"
         >
           {exiting ? (
             <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
