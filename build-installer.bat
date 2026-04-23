@@ -80,7 +80,7 @@ goto :electron_tools_ready
 :repair_electron_tools
 call :log "[WARNING] Electron build tools are incomplete. Repairing dependencies automatically..."
 call :log "[INFO] Repair is limited to Electron packages so we do not re-run a full install when only desktop build tools are missing."
-call :run "Repairing Electron dependencies with npm install" npm install electron@^41.2.2 electron-builder@^26.8.1 electron-squirrel-startup@^1.0.1 electron-updater@^6.8.3 --package-lock=false --no-save --no-audit --no-fund --loglevel=error
+call :run "Repairing Electron dependencies with npm install" npm install electron@41.2.2 electron-builder@26.8.1 electron-squirrel-startup@1.0.1 electron-updater@6.8.3 --package-lock=false --no-save --no-audit --no-fund --loglevel=error
 if errorlevel 1 (
     call :log "[ERROR] Failed while repairing Electron dependencies."
     goto :fail
