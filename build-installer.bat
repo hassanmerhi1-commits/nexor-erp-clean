@@ -131,7 +131,7 @@ set "STEP_COMMAND=%~2"
 call :log "%STEP_LABEL%"
 >> "%LOG_FILE%" echo.
 >> "%LOG_FILE%" echo ==== %DATE% %TIME% - %STEP_LABEL% ====
-call %STEP_COMMAND% >> "%LOG_FILE%" 2>&1
+cmd /d /s /c "%STEP_COMMAND%" >> "%LOG_FILE%" 2>&1
 exit /b %errorlevel%
 
 :log
