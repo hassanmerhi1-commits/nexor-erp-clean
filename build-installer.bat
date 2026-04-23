@@ -57,11 +57,9 @@ call :log ""
 call :log "[1/5] Verifying app dependencies..."
 set "NEEDS_FULL_INSTALL=0"
 if not exist "node_modules\.bin\vite.cmd" set "NEEDS_FULL_INSTALL=1"
-if not exist "node_modules\.bin\electron-builder.cmd" set "NEEDS_FULL_INSTALL=1"
-if not exist "node_modules\electron\dist\electron.exe" set "NEEDS_FULL_INSTALL=1"
 
 if "%NEEDS_FULL_INSTALL%"=="0" (
-    call :log "[OK] App and Electron dependencies already installed."
+    call :log "[OK] Core app dependencies already installed."
 ) else (
     call :log "[INFO] Missing dependencies detected. Reinstalling full project dependencies..."
     call :log "[INFO] Using npm install with package-lock disabled so missing Electron packages can be added even if package-lock.json is stale."
@@ -81,8 +79,8 @@ goto :electron_tools_ready
 
 :repair_electron_tools
 call :log "[WARNING] Electron build tools are incomplete. Repairing dependencies automatically..."
-call :log "[INFO] Repair uses npm install with package-lock disabled because npm ci would recreate the stale lockfile tree without Electron."
-call :run "Repairing Electron dependencies with npm install" npm install --package-lock=false --no-audit --no-fund --loglevel=error
+call :log "[INFO] Repair is limited to Electron packages so we do not re-run a full install when only desktop build tools are missing."
+call :run "Repairing Electron dependencies with npm install" npm install electron@^41.2.2 electron-builder@^26.8.1 electron-squirrel-startup@^1.0.1 electron-updater@^6.8.3 --package-lock=false --no-save --no-audit --no-fund --loglevel=error
 if errorlevel 1 (
     call :log "[ERROR] Failed while repairing Electron dependencies."
     goto :fail
