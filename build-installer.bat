@@ -63,7 +63,7 @@ if "%NEEDS_FULL_INSTALL%"=="0" (
 ) else (
     call :log "[INFO] Missing dependencies detected. Reinstalling full project dependencies..."
     call :log "[INFO] Using npm install with package-lock disabled so missing Electron packages can be added even if package-lock.json is stale."
-    call :run "Installing app dependencies with npm install" npm install --package-lock=false --no-audit --no-fund --loglevel=error
+call :run "Installing app dependencies with npm install" "npm install --package-lock=false --no-audit --no-fund --loglevel=error"
     if errorlevel 1 (
         call :log "[ERROR] Failed to install app dependencies."
         goto :fail
@@ -80,7 +80,7 @@ goto :electron_tools_ready
 :repair_electron_tools
 call :log "[WARNING] Electron build tools are incomplete. Repairing dependencies automatically..."
 call :log "[INFO] Repair is limited to Electron packages so we do not re-run a full install when only desktop build tools are missing."
-call :run "Repairing Electron dependencies with npm install" npm install electron@41.2.2 electron-builder@26.8.1 electron-squirrel-startup@1.0.1 electron-updater@6.8.3 --package-lock=false --no-save --no-audit --no-fund --loglevel=error
+call :run "Repairing Electron dependencies with npm install" "npm install electron@41.2.2 electron-builder@26.8.1 electron-squirrel-startup@1.0.1 electron-updater@6.8.3 --package-lock=false --no-save --no-audit --no-fund --loglevel=error"
 if errorlevel 1 (
     call :log "[ERROR] Failed while repairing Electron dependencies."
     goto :fail
@@ -98,14 +98,14 @@ call :log "[OK] Electron build tools repaired successfully."
 :electron_tools_ready
 call :log ""
 
-call :run "[3/5] Building web application" npm run build
+call :run "[3/5] Building web application" "npm run build"
 if errorlevel 1 (
     call :log "[ERROR] Failed to build web app."
     goto :fail
 )
 call :log ""
 
-call :run "[4/5] Building Windows installer" npx electron-builder --win
+call :run "[4/5] Building Windows installer" "npx electron-builder --win"
 if errorlevel 1 (
     call :log "[ERROR] Failed to build installer."
     goto :fail
@@ -126,11 +126,12 @@ pause
 exit /b 0
 
 :run
-call :log "%~1"
-shift
+set "STEP_LABEL=%~1"
+set "STEP_COMMAND=%~2"
+call :log "%STEP_LABEL%"
 >> "%LOG_FILE%" echo.
->> "%LOG_FILE%" echo ==== %DATE% %TIME% - %~1 ====
-call %* >> "%LOG_FILE%" 2>&1
+>> "%LOG_FILE%" echo ==== %DATE% %TIME% - %STEP_LABEL% ====
+call %STEP_COMMAND% >> "%LOG_FILE%" 2>&1
 exit /b %errorlevel%
 
 :log
