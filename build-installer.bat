@@ -64,11 +64,8 @@ if "%NEEDS_FULL_INSTALL%"=="0" (
     call :log "[OK] App and Electron dependencies already installed."
 ) else (
     call :log "[INFO] Missing dependencies detected. Reinstalling full project dependencies..."
-    if exist "package-lock.json" (
-        call :run "Installing app dependencies with npm ci" npm ci --no-audit --no-fund --loglevel=error
-    ) else (
-        call :run "Installing app dependencies with npm install" npm install --no-audit --no-fund --loglevel=error
-    )
+    call :log "[INFO] Using npm install instead of npm ci so missing Electron packages can be added even if package-lock.json is stale."
+    call :run "Installing app dependencies with npm install" npm install --no-audit --no-fund --loglevel=error
     if errorlevel 1 (
         call :log "[ERROR] Failed to install app dependencies."
         goto :fail
@@ -84,11 +81,8 @@ goto :electron_tools_ready
 
 :repair_electron_tools
 call :log "[WARNING] Electron build tools are incomplete. Repairing dependencies automatically..."
-if exist "package-lock.json" (
-    call :run "Repairing Electron dependencies with npm ci" npm ci --no-audit --no-fund --loglevel=error
-) else (
-    call :run "Repairing Electron dependencies with npm install" npm install --no-audit --no-fund --loglevel=error
-)
+call :log "[INFO] Repair uses npm install because npm ci would recreate the stale lockfile tree without Electron."
+call :run "Repairing Electron dependencies with npm install" npm install --no-audit --no-fund --loglevel=error
 if errorlevel 1 (
     call :log "[ERROR] Failed while repairing Electron dependencies."
     goto :fail
