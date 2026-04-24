@@ -9,9 +9,8 @@ installs it silently as a Windows service called **NEXOR_PostgreSQL**.
 
 - If PostgreSQL 16 is already installed on the target PC → reuse it.
 - If not → install silently from the bundled binary.
-- Docker is **no longer required** and is no longer mentioned by the
-  app. The legacy `docker-compose.yml` is kept only as a developer
-  fallback under `legacy/docker/`.
+- Docker is **no longer required** and is not part of the supported
+  runtime architecture.
 
 Before running `build-installer.bat`, drop the official EnterpriseDB
 installer in `installer/postgres/postgresql-16-windows-x64.exe`.

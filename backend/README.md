@@ -42,7 +42,7 @@ Your server will run at `http://192.168.x.x:3000` (your local IP)
 
 On other PCs, open a browser and go to:
 ```
-http://[SERVER_IP]:5173
+http://[SERVER_IP]:3000/app
 ```
 
 Replace `[SERVER_IP]` with your server's local IP address (e.g., 192.168.1.50)

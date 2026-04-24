@@ -230,7 +230,7 @@ app.get('/api/health', async (req, res) => {
   let dbConnected = false;
   let dbLatency = null;
   let dbVersion = null;
-  let dockerInfo = null;
+  let dbInfo = null;
 
   try {
     const start = Date.now();
@@ -239,7 +239,7 @@ app.get('/api/health', async (req, res) => {
     dbConnected = true;
     const row = result.rows[0];
     dbVersion = row.pg_version;
-    dockerInfo = {
+    dbInfo = {
       database: row.db_name,
       serverAddr: row.server_addr,
       serverPort: row.server_port,
@@ -259,7 +259,7 @@ app.get('/api/health', async (req, res) => {
       connected: dbConnected,
       latency: dbLatency,
       version: dbVersion,
-      ...dockerInfo,
+      ...dbInfo,
     },
     system: {
       hostname: os.hostname(),
