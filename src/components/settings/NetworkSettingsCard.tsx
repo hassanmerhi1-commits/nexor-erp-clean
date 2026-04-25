@@ -5,15 +5,13 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
-import { Switch } from '@/components/ui/switch';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Slider } from '@/components/ui/slider';
-import { 
-  Network, 
-  Wifi, 
-  WifiOff, 
-  CheckCircle2, 
-  XCircle, 
+import {
+  Network,
+  Wifi,
+  WifiOff,
+  CheckCircle2,
+  XCircle,
   Loader2,
   Server,
   Globe,
@@ -21,25 +19,10 @@ import {
   Search,
   Radio,
   Users,
-  Play,
-  Square,
-  FlaskConical,
-  Activity
 } from 'lucide-react';
-import { getApiUrl, setApiUrl, isLocalNetworkMode, setForceApiMode } from '@/lib/api/config';
+import { getApiUrl, setApiUrl, isLocalNetworkMode } from '@/lib/api/config';
 import { toast } from 'sonner';
 import type { DiscoveredServer } from '@/types/electron';
-
-import { 
-  startMockServer, 
-  stopMockServer, 
-  isMockServerRunning, 
-  mockHealthCheck,
-  getMockDiscoveredServers,
-  configureMockServer,
-  subscribeMockEvents,
-  getMockServerStatus
-} from '@/lib/mockServer';
 
 interface ConnectionTestResult {
   success: boolean;
@@ -65,27 +48,11 @@ export function NetworkSettingsCard() {
   const [discoveredServers, setDiscoveredServers] = useState<DiscoveredServer[]>([]);
   const [isElectron, setIsElectron] = useState(false);
   
-  // Mock server state
-  const [mockServerRunning, setMockServerRunning] = useState(false);
-  const [mockLatency, setMockLatency] = useState(50);
-  const [mockFailureRate, setMockFailureRate] = useState(0);
-  const [mockRequestCount, setMockRequestCount] = useState(0);
-
   useEffect(() => {
     const currentUrl = getApiUrl();
     setServerUrl(currentUrl);
     setIsNetworkMode(isLocalNetworkMode());
     setIsElectron(!!window.electronAPI?.discovery);
-    setMockServerRunning(isMockServerRunning());
-    
-    // Subscribe to mock server events
-    const unsubscribe = subscribeMockEvents((event, data) => {
-      if (event === 'request') {
-        setMockRequestCount(prev => prev + 1);
-      }
-    });
-    
-    return unsubscribe;
   }, []);
 
   const handleUrlChange = (value: string) => {
@@ -176,11 +143,6 @@ export function NetworkSettingsCard() {
     // Page will reload automatically
   };
 
-  const toggleNetworkMode = (enabled: boolean) => {
-    setForceApiMode(enabled);
-    // Page will reload automatically
-  };
-
   const resetToDefault = () => {
     setServerUrl('http://localhost:3000');
     setHasChanges(true);
@@ -193,18 +155,6 @@ export function NetworkSettingsCard() {
     setIsDiscovering(true);
     setDiscoveredServers([]);
     toast.info('Procurando servidores na rede local...');
-
-    // Check for mock server first
-    if (mockServerRunning) {
-      await new Promise(r => setTimeout(r, 1000)); // Simulate scan time
-      const mockServers = getMockDiscoveredServers();
-      if (mockServers.length > 0) {
-        setDiscoveredServers(mockServers);
-        toast.success(`Encontrado(s) ${mockServers.length} servidor(es) (mock)`);
-        setIsDiscovering(false);
-        return;
-      }
-    }
 
     // Use Electron discovery if available
     if (window.electronAPI?.discovery) {
@@ -222,65 +172,13 @@ export function NetworkSettingsCard() {
       } catch (error: any) {
         toast.error('Falha na descoberta: ' + error.message);
       }
-    } else if (!mockServerRunning) {
-      toast.info('Inicie o servidor de teste local ou use o app desktop');
+    } else {
+      toast.info('Use o app desktop para descoberta automática');
     }
     
     setIsDiscovering(false);
   };
   
-  // Toggle mock server
-  const toggleMockServer = () => {
-    if (mockServerRunning) {
-      stopMockServer();
-      setMockServerRunning(false);
-      setMockRequestCount(0);
-      toast.info('Servidor de teste parado');
-    } else {
-      startMockServer({
-        simulatedLatency: mockLatency,
-        failureRate: mockFailureRate / 100
-      });
-      setMockServerRunning(true);
-      toast.success('Servidor de teste iniciado');
-    }
-  };
-  
-  // Update mock server config
-  const updateMockConfig = (latency: number, failureRate: number) => {
-    setMockLatency(latency);
-    setMockFailureRate(failureRate);
-    if (mockServerRunning) {
-      configureMockServer({
-        simulatedLatency: latency,
-        failureRate: failureRate / 100
-      });
-    }
-  };
-  
-  // Test connection with mock server support
-  const testConnectionWithMock = async () => {
-    if (mockServerRunning && (serverUrl.includes('localhost') || serverUrl.includes('127.0.0.1'))) {
-      setIsTestingConnection(true);
-      setTestResult(null);
-      
-      const result = await mockHealthCheck();
-      setTestResult(result);
-      
-      if (result.success) {
-        toast.success(`Conexão mock bem-sucedida! Latência: ${result.latency}ms`);
-      } else {
-        toast.error(result.error || 'Falha na conexão mock');
-      }
-      
-      setIsTestingConnection(false);
-      return;
-    }
-    
-    // Use regular test
-    await testConnection();
-  };
-
   // Select a discovered server
   const selectServer = (server: DiscoveredServer) => {
     const url = `http://${server.ip}:${server.port}`;
@@ -298,7 +196,7 @@ export function NetworkSettingsCard() {
           Configurações de Rede
         </CardTitle>
         <CardDescription>
-          Configure a conexão com o servidor central para sincronização em tempo real
+          Conectar esta estação ao servidor central.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
@@ -330,91 +228,6 @@ export function NetworkSettingsCard() {
             {isNetworkMode ? 'Ativo' : 'Offline'}
           </Badge>
         </div>
-
-        <Separator />
-
-        {/* Mock Server Section - Local Testing */}
-        <div className="space-y-4 p-4 rounded-lg border-2 border-dashed border-primary/30 bg-primary/5">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <FlaskConical className="w-5 h-5 text-primary" />
-              <div>
-                <p className="font-medium">Servidor de Teste Local</p>
-                <p className="text-xs text-muted-foreground">
-                  Simula conexão de rede no mesmo computador
-                </p>
-              </div>
-            </div>
-            <Button
-              variant={mockServerRunning ? "destructive" : "default"}
-              size="sm"
-              onClick={toggleMockServer}
-              className="gap-2"
-            >
-              {mockServerRunning ? (
-                <>
-                  <Square className="w-4 h-4" />
-                  Parar
-                </>
-              ) : (
-                <>
-                  <Play className="w-4 h-4" />
-                  Iniciar
-                </>
-              )}
-            </Button>
-          </div>
-          
-          {mockServerRunning && (
-            <div className="space-y-4 pt-2">
-              {/* Mock server stats */}
-              <div className="flex items-center gap-4 text-sm">
-                <Badge variant="outline" className="gap-1">
-                  <Activity className="w-3 h-3" />
-                  {mockRequestCount} requisições
-                </Badge>
-                <Badge variant="secondary">
-                  Latência: {mockLatency}ms
-                </Badge>
-                <Badge variant={mockFailureRate > 0 ? "destructive" : "secondary"}>
-                  Falhas: {mockFailureRate}%
-                </Badge>
-              </div>
-              
-              {/* Latency slider */}
-              <div className="space-y-2">
-                <div className="flex justify-between text-xs text-muted-foreground">
-                  <span>Latência simulada</span>
-                  <span>{mockLatency}ms</span>
-                </div>
-                <Slider
-                  value={[mockLatency]}
-                  onValueChange={([val]) => updateMockConfig(val, mockFailureRate)}
-                  min={0}
-                  max={500}
-                  step={10}
-                />
-              </div>
-              
-              {/* Failure rate slider */}
-              <div className="space-y-2">
-                <div className="flex justify-between text-xs text-muted-foreground">
-                  <span>Taxa de falha (para testes)</span>
-                  <span>{mockFailureRate}%</span>
-                </div>
-                <Slider
-                  value={[mockFailureRate]}
-                  onValueChange={([val]) => updateMockConfig(mockLatency, val)}
-                  min={0}
-                  max={50}
-                  step={5}
-                />
-              </div>
-            </div>
-          )}
-        </div>
-
-        <Separator />
 
         {/* Auto-Discovery Section */}
         <div className="space-y-3">
@@ -507,7 +320,7 @@ export function NetworkSettingsCard() {
               className="flex-1"
             />
             <Button
-              variant="outline"
+              variant="ghost"
               size="icon"
               onClick={resetToDefault}
               title="Resetar para padrão"
@@ -516,19 +329,16 @@ export function NetworkSettingsCard() {
             </Button>
           </div>
           <p className="text-xs text-muted-foreground">
-            {mockServerRunning 
-              ? 'Servidor de teste local está em execução - use localhost:3000'
-              : isElectron 
-                ? 'Use a descoberta automática ou insira o IP manualmente'
-                : 'Insira o IP do servidor principal (ex: http://192.168.1.50:3000)'
-            }
+            {isElectron
+              ? 'Use a descoberta automática ou insira o IP manualmente'
+              : 'Insira o IP do servidor principal (ex: http://192.168.1.50:3000)'}
           </p>
         </div>
 
         {/* Test Connection Button */}
         <Button
           variant="outline"
-          onClick={testConnectionWithMock}
+          onClick={testConnection}
           disabled={isTestingConnection || !serverUrl}
           className="w-full gap-2"
         >
@@ -540,7 +350,7 @@ export function NetworkSettingsCard() {
           ) : (
             <>
               <Wifi className="w-4 h-4" />
-              Testar Conexão {mockServerRunning && '(Mock)'}
+              Testar ligação
             </>
           )}
         </Button>
@@ -595,7 +405,7 @@ export function NetworkSettingsCard() {
           {testResult?.success && hasChanges ? (
             <>
               <CheckCircle2 className="w-4 h-4" />
-              Salvar e Conectar
+              Guardar e ligar
             </>
           ) : (
             <>
@@ -604,22 +414,6 @@ export function NetworkSettingsCard() {
             </>
           )}
         </Button>
-
-        {/* Force API Mode Toggle (for development) */}
-        <div className="pt-4 border-t">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium">Forçar Modo API</p>
-              <p className="text-xs text-muted-foreground">
-                Usar API mesmo em localhost (para testes)
-              </p>
-            </div>
-            <Switch
-              checked={isNetworkMode}
-              onCheckedChange={toggleNetworkMode}
-            />
-          </div>
-        </div>
       </CardContent>
     </Card>
   );

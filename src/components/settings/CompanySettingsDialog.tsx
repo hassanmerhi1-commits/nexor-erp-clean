@@ -16,21 +16,18 @@ import {
   Building2, 
   Upload, 
   Save, 
-  RotateCcw,
   Phone,
   Mail,
   Globe,
   CreditCard,
   FileText,
   Shield,
-  RefreshCw,
   DollarSign
 } from 'lucide-react';
 import {
   CompanySettings,
   getCompanySettings,
   saveCompanySettings,
-  resetCompanySettings,
   fileToBase64,
   validateNIF,
 } from '@/lib/companySettings';
@@ -127,14 +124,6 @@ export function CompanySettingsDialog({
     }
   };
 
-  const handleReset = () => {
-    if (confirm('Tem certeza que deseja repor as configurações padrão?')) {
-      const defaultSettings = resetCompanySettings();
-      setSettings(defaultSettings);
-      toast.info('Configurações repostas');
-    }
-  };
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
@@ -143,9 +132,7 @@ export function CompanySettingsDialog({
             <Building2 className="w-5 h-5" />
             Configurações da Empresa
           </DialogTitle>
-          <DialogDescription>
-            Configure os dados da empresa para facturas e recibos
-          </DialogDescription>
+          <DialogDescription>Dados usados nos documentos.</DialogDescription>
         </DialogHeader>
 
         <Tabs defaultValue="general" className="w-full">
@@ -545,20 +532,14 @@ export function CompanySettingsDialog({
         <Separator className="my-4" />
 
         {/* Actions */}
-        <div className="flex justify-between">
-          <Button variant="ghost" onClick={handleReset}>
-            <RotateCcw className="w-4 h-4 mr-2" />
-            Repor Padrão
+        <div className="flex justify-end gap-2">
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Cancelar
           </Button>
-          <div className="flex gap-2">
-            <Button variant="outline" onClick={() => onOpenChange(false)}>
-              Cancelar
-            </Button>
-            <Button onClick={handleSave} disabled={isSaving}>
-              <Save className="w-4 h-4 mr-2" />
-              {isSaving ? 'A guardar...' : 'Guardar'}
-            </Button>
-          </div>
+          <Button onClick={handleSave} disabled={isSaving}>
+            <Save className="w-4 h-4 mr-2" />
+            {isSaving ? 'A guardar...' : 'Guardar'}
+          </Button>
         </div>
       </DialogContent>
     </Dialog>

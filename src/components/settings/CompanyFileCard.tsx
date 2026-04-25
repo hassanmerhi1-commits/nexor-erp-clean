@@ -184,10 +184,10 @@ export function CompanyFileCard() {
             <div>
               <CardTitle className="flex items-center gap-2">
                 <Database className="h-5 w-5 text-primary" />
-                Company File (.nexor)
+                Ficheiro da Empresa (.nexor)
               </CardTitle>
               <CardDescription>
-                The .nexor file IS your company. Export, share, or restore the full database as a single portable file.
+                Exportar, descarregar ou restaurar a empresa num ficheiro unico.
               </CardDescription>
             </div>
             {info?.readOnlyMode && (
@@ -248,10 +248,10 @@ export function CompanyFileCard() {
           <div className="space-y-3">
             <div>
               <Label htmlFor="branchLabel" className="text-sm font-medium">
-                Branch / Company label
+                Etiqueta da filial/empresa
               </Label>
               <p className="text-xs text-muted-foreground mt-0.5">
-                Used as the file prefix — e.g. <span className="font-mono">SOYO</span> →{' '}
+                Usado como prefixo do ficheiro — ex.: <span className="font-mono">SOYO</span> →{' '}
                 <span className="font-mono">SOYO-2026-04-22.nexor</span>
               </p>
             </div>
@@ -266,9 +266,9 @@ export function CompanyFileCard() {
               />
               <Button onClick={handleExport} disabled={exporting || info?.readOnlyMode}>
                 {exporting ? (
-                  <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Exporting…</>
+                  <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> A exportar...</>
                 ) : (
-                  <><FileDown className="h-4 w-4 mr-2" /> Export Now</>
+                  <><FileDown className="h-4 w-4 mr-2" /> Exportar agora</>
                 )}
               </Button>
             </div>
@@ -279,7 +279,7 @@ export function CompanyFileCard() {
           {/* List */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <Label className="text-sm font-medium">Existing snapshots</Label>
+              <Label className="text-sm font-medium">Snapshots existentes</Label>
               <Button variant="ghost" size="sm" onClick={refresh} disabled={loading}>
                 {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Refresh'}
               </Button>

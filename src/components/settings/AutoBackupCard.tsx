@@ -100,13 +100,11 @@ export function AutoBackupCard() {
           <div>
             <CardTitle className="flex items-center gap-2">
               <Shield className="h-5 w-5 text-primary" />
-              Auto-Backup Safety Net
+              Backup Automático
             </CardTitle>
-            <CardDescription>
-              Scheduled PostgreSQL snapshots. Survive crashes, disk loss, or accidental deletes.
-            </CardDescription>
+            <CardDescription>Cópias automáticas agendadas da base de dados.</CardDescription>
           </div>
-          <Button variant="outline" size="sm" onClick={refresh} disabled={loading}>
+          <Button variant="ghost" size="sm" onClick={refresh} disabled={loading}>
             <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
           </Button>
         </div>
@@ -149,7 +147,7 @@ export function AutoBackupCard() {
           </div>
 
           <div className="rounded-md border bg-muted/30 p-3">
-            <div className="text-xs text-muted-foreground mb-1">Snapshots</div>
+            <div className="text-xs text-muted-foreground mb-1">Backups</div>
             <div className="font-medium">
               {status?.snapshots ?? 0}
               <span className="text-muted-foreground"> / {status?.retention ?? '—'}</span>
@@ -198,12 +196,12 @@ export function AutoBackupCard() {
             {running || status?.running ? (
               <>
                 <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                Backing up…
+                A criar backup...
               </>
             ) : (
               <>
                 <PlayCircle className="h-4 w-4 mr-2" />
-                Run backup now
+                Criar backup agora
               </>
             )}
           </Button>
@@ -215,10 +213,10 @@ export function AutoBackupCard() {
         {/* Snapshot list */}
         <Separator />
         <div>
-          <div className="text-sm font-medium mb-2">Available snapshots</div>
+          <div className="text-sm font-medium mb-2">Backups disponíveis</div>
           {snapshots.length === 0 ? (
             <div className="text-sm text-muted-foreground italic">
-              No snapshots yet. The first run will appear here shortly after boot.
+              Ainda não existem backups.
             </div>
           ) : (
             <div className="space-y-1.5 max-h-72 overflow-auto pr-1">

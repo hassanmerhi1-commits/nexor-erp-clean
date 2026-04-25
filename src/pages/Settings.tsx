@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { useTranslation } from '@/i18n';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -17,31 +16,26 @@ import {
   Loader2,
   Server,
   MonitorSmartphone,
-  RotateCcw,
   Upload,
   HardDrive,
   Shield,
 } from 'lucide-react';
 import { CompanySettingsDialog } from '@/components/settings/CompanySettingsDialog';
 import { NetworkSettingsCard } from '@/components/settings/NetworkSettingsCard';
-import { HotUpdateSettingsCard } from '@/components/settings/HotUpdateSettingsCard';
 import { CompanyFileCard } from '@/components/settings/CompanyFileCard';
 import { BranchSyncCard } from '@/components/settings/BranchSyncCard';
 import { AutoBackupCard } from '@/components/settings/AutoBackupCard';
-import { toast } from 'sonner';
 import { downloadBackup, parseBackupFile, restoreBackup, getStorageStats } from '@/lib/backup';
 import type { UpdateStatus, SetupConfig } from '@/types/electron';
 
 export default function Settings() {
   const { t } = useTranslation();
-  const navigate = useNavigate();
   const [appVersion, setAppVersion] = useState<string>('');
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
   const [isChecking, setIsChecking] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
   const [companySettingsOpen, setCompanySettingsOpen] = useState(false);
   const [setupConfig, setSetupConfig] = useState<SetupConfig | null>(null);
-  const [isResettingSetup, setIsResettingSetup] = useState(false);
   
   const isElectron = !!window.electronAPI?.isElectron;
 
@@ -102,37 +96,6 @@ export default function Settings() {
     }
   }, [isElectron]);
   
-  const handleResetSetup = async () => {
-    setIsResettingSetup(true);
-    try {
-      // Reset Electron persistent storage
-      if (isElectron && window.electronAPI?.setup?.reset) {
-        await window.electronAPI.setup.reset();
-      }
-      
-      // Clear localStorage setup flags
-      localStorage.removeItem('kwanza_setup_complete');
-      localStorage.removeItem('kwanza_is_server');
-      localStorage.removeItem('kwanza_server_config');
-      localStorage.removeItem('kwanza_client_config');
-      localStorage.removeItem('kwanza_api_url');
-      
-      toast.success('Setup reset successfully. Redirecting to setup wizard...');
-      
-      // Navigate to setup page
-      setTimeout(() => {
-        navigate('/setup');
-        // Force reload to ensure clean state
-        window.location.reload();
-      }, 1000);
-    } catch (error) {
-      console.error('Failed to reset setup:', error);
-      toast.error('Failed to reset setup');
-    } finally {
-      setIsResettingSetup(false);
-    }
-  };
-
   const handleCheckForUpdates = async () => {
     if (!isElectron) return;
     
@@ -191,9 +154,7 @@ export default function Settings() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">{t.nav.settings}</h1>
-          <p className="text-muted-foreground">
-            Manage application settings and preferences
-          </p>
+          <p className="text-muted-foreground">Configuração principal do sistema</p>
         </div>
       </div>
 
@@ -203,21 +164,14 @@ export default function Settings() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Info className="w-5 h-5" />
-              Application Information
+              Aplicação
             </CardTitle>
-            <CardDescription>
-              Version details and system information
-            </CardDescription>
+            <CardDescription>Versao e ambiente de execucao.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex items-center justify-between">
               <span className="text-sm text-muted-foreground">Application</span>
               <span className="font-medium">Kwanza ERP</span>
-            </div>
-            <Separator />
-            <div className="flex items-center justify-between">
-              <span className="text-sm text-muted-foreground">Developer</span>
-              <span className="font-medium">Hassan Merhi</span>
             </div>
             <Separator />
             <div className="flex items-center justify-between">
@@ -249,11 +203,9 @@ export default function Settings() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <RefreshCw className="w-5 h-5" />
-              Software Updates
+              Atualizações
             </CardTitle>
-            <CardDescription>
-              Check for and install application updates
-            </CardDescription>
+            <CardDescription>Verificar e instalar actualizacoes do desktop.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             {!isElectron ? (
@@ -336,16 +288,14 @@ export default function Settings() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <SettingsIcon className="w-5 h-5" />
-              Company Settings
+              Perfil da Empresa
             </CardTitle>
-            <CardDescription>
-              Configure company information for invoices and documents
-            </CardDescription>
+            <CardDescription>Dados legais da empresa para documentos.</CardDescription>
           </CardHeader>
           <CardContent>
             <Button variant="outline" onClick={() => setCompanySettingsOpen(true)}>
               <SettingsIcon className="w-4 h-4 mr-2" />
-              Open Company Settings
+              Abrir perfil da empresa
             </Button>
             <CompanySettingsDialog 
               open={companySettingsOpen} 
@@ -372,18 +322,16 @@ export default function Settings() {
               ) : (
                 <MonitorSmartphone className="w-5 h-5" />
               )}
-              Setup Configuration
+              Configuração da Instalação
             </CardTitle>
-            <CardDescription>
-              Current server/client configuration
-            </CardDescription>
+            <CardDescription>Modo actual da instalacao: servidor ou cliente.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex items-center justify-between">
               <span className="text-sm text-muted-foreground">Mode</span>
               <Badge variant={setupConfig?.role === 'server' ? 'default' : 'secondary'}>
-                {setupConfig?.role === 'server' ? 'Server' : 
-                 setupConfig?.role === 'client' ? 'Client' : 'Not configured'}
+                {setupConfig?.role === 'server' ? 'Server' :
+                 setupConfig?.role === 'client' ? 'Client' : 'Not Configured'}
               </Badge>
             </div>
             
@@ -393,8 +341,8 @@ export default function Settings() {
                 <div className="flex items-center justify-between">
                   <span className="text-sm text-muted-foreground">Database</span>
                   <span className="text-xs font-mono truncate max-w-[250px]">
-                    {setupConfig.serverConfig.databasePath?.startsWith('postgresql') 
-                      ? 'PostgreSQL (nativo)' 
+                    {setupConfig.serverConfig.databasePath?.startsWith('postgresql')
+                      ? 'PostgreSQL (native)'
                       : setupConfig.serverConfig.databasePath || 'PostgreSQL (Default)'}
                   </span>
                 </div>
@@ -418,23 +366,6 @@ export default function Settings() {
               </>
             )}
             
-            <Separator />
-            <Button 
-              variant="destructive" 
-              onClick={handleResetSetup}
-              disabled={isResettingSetup}
-              className="w-full gap-2"
-            >
-              {isResettingSetup ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                <RotateCcw className="w-4 h-4" />
-              )}
-              Reset Setup Configuration
-            </Button>
-            <p className="text-xs text-muted-foreground text-center">
-              This will reset the server/client configuration and restart the setup wizard.
-            </p>
           </CardContent>
         </Card>
 
@@ -444,8 +375,6 @@ export default function Settings() {
         {/* Network Settings Card */}
         <NetworkSettingsCard />
 
-        {/* Hot Update Settings Card */}
-        <HotUpdateSettingsCard />
       </div>
     </div>
   );
@@ -490,10 +419,10 @@ function BackupRestoreCard() {
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <HardDrive className="w-5 h-5" />
-          Backup & Restauração
+          Backup e Restauro
         </CardTitle>
         <CardDescription>
-          Exporte todos os dados para um ficheiro JSON ou restaure de um backup anterior
+          Exportar e restaurar dados locais
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -508,7 +437,7 @@ function BackupRestoreCard() {
         <div className="grid grid-cols-2 gap-3">
           <Button onClick={handleBackup} variant="outline" className="gap-2 h-12">
             <Download className="w-4 h-4" />
-            Criar Backup
+            Criar backup
           </Button>
           <div>
             <input ref={fileRef} type="file" accept=".json" onChange={handleRestore} className="hidden" />
@@ -519,14 +448,13 @@ function BackupRestoreCard() {
               disabled={isRestoring}
             >
               {isRestoring ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
-              Restaurar Backup
+              Restaurar backup
             </Button>
           </div>
         </div>
 
         <p className="text-[10px] text-muted-foreground text-center">
-          O backup inclui todos os produtos, vendas, clientes, fornecedores, configurações e mais.
-          Recomendamos criar backups diariamente.
+          Inclui produtos, vendas, clientes, fornecedores e configurações.
         </p>
       </CardContent>
     </Card>

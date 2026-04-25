@@ -167,12 +167,9 @@ export function BranchSyncCard() {
           <div>
             <CardTitle className="flex items-center gap-2">
               <Wallet className="h-5 w-5 text-primary" />
-              Branch Sync — Push / Receive Sales
+              Sincronização de Filiais
             </CardTitle>
-            <CardDescription>
-              End-of-day exchange between a branch PC and the head office. Sales are packaged as a small{' '}
-              <span className="font-mono">.dat</span> file. Importing the file deducts stock and posts journals automatically.
-            </CardDescription>
+            <CardDescription>Troca diária de vendas por ficheiro `.dat`.</CardDescription>
           </div>
           {info?.readOnlyMode && (
             <Badge variant="outline" className="border-warning/60 text-warning">
@@ -197,7 +194,7 @@ export function BranchSyncCard() {
         <section className="space-y-3">
           <div className="flex items-center gap-2">
             <ArrowUpFromLine className="h-4 w-4 text-primary" />
-            <h3 className="text-sm font-semibold">On the branch PC — Push day's sales</h3>
+            <h3 className="text-sm font-semibold">Filial: enviar vendas</h3>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -224,13 +221,13 @@ export function BranchSyncCard() {
           <div className="flex items-center justify-between gap-3">
             <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer select-none">
               <Switch checked={force} onCheckedChange={setForce} />
-              Re-export sales already pushed
+              Reenviar vendas já exportadas
             </label>
             <Button onClick={handlePush} disabled={pushing || info?.readOnlyMode}>
               {pushing ? (
-                <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Pushing…</>
+                <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> A enviar...</>
               ) : (
-                <><ArrowUpFromLine className="h-4 w-4 mr-2" /> Push Day's Sales</>
+                <><ArrowUpFromLine className="h-4 w-4 mr-2" /> Enviar vendas do dia</>
               )}
             </Button>
           </div>
@@ -242,7 +239,7 @@ export function BranchSyncCard() {
         <section className="space-y-3">
           <div className="flex items-center gap-2">
             <ArrowDownToLine className="h-4 w-4 text-primary" />
-            <h3 className="text-sm font-semibold">On the head office PC — Receive branch sales</h3>
+            <h3 className="text-sm font-semibold">Sede: receber vendas</h3>
           </div>
 
           <div className="flex items-center gap-2">
@@ -262,11 +259,9 @@ export function BranchSyncCard() {
               disabled={!!receiving || info?.readOnlyMode}
             >
               <Upload className="h-4 w-4 mr-2" />
-              Receive from file…
+              Receber de ficheiro
             </Button>
-            <span className="text-xs text-muted-foreground">
-              Or pick one already in the sync folder below.
-            </span>
+            <span className="text-xs text-muted-foreground">Ou selecione um ficheiro da lista abaixo.</span>
           </div>
 
           {/* Last receive summary */}
@@ -305,7 +300,7 @@ export function BranchSyncCard() {
         {/* ---------- LIST ---------- */}
         <section className="space-y-2">
           <div className="flex items-center justify-between">
-            <Label className="text-sm font-medium">Sync files in folder</Label>
+            <Label className="text-sm font-medium">Ficheiros de sincronização</Label>
             <Button variant="ghost" size="sm" onClick={refresh} disabled={loading}>
               {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Refresh'}
             </Button>
